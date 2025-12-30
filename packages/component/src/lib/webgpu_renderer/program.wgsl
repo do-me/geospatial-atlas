@@ -282,7 +282,7 @@ fn gamma_correction_fs(in: GammaCorrectionVertexOutput) -> @location(0) vec4<f32
     color = uniforms.background_color;
   }
   let rgb = pow(color.rgb, vec3(1.0 / uniforms.gamma));
-  return vec4(rgb, 1.0);
+  return vec4(rgb, color.a);
 }
 
 // Gaussian Blur

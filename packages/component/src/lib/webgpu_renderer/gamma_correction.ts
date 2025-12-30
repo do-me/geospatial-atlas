@@ -25,7 +25,7 @@ export function makeGammaCorrectionCommand(
     [pipeline, bindGroups.group0, bindGroups.group1, bindGroups.group2B, bindGroups.group3],
     (pipeline, group0, group1, group2B, group3) => (encoder, textureView) => {
       let pass = encoder.beginRenderPass({
-        colorAttachments: [{ clearValue: [1, 1, 1, 1], loadOp: "clear", storeOp: "store", view: textureView }],
+        colorAttachments: [{ clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store", view: textureView }],
       });
       pass.setPipeline(pipeline);
       pass.setBindGroup(0, group0);

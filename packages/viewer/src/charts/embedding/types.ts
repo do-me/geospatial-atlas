@@ -10,6 +10,7 @@ export interface EmbeddingSpec {
     y: string;
     text?: string | null;
     category?: string | null;
+    isGis?: boolean;
   };
   mode?: "points" | "density";
   minimumDensity?: number;

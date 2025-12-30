@@ -64,6 +64,7 @@ export class EmbeddingRendererWebGL2 implements EmbeddingRenderer {
 
       downsampleMaxPoints: 4000000,
       downsampleDensityWeight: 5,
+      isGis: false,
     };
 
     this.viewport = new Viewport({ x: 0, y: 0, scale: 1 }, width, height);
@@ -105,6 +106,7 @@ export class EmbeddingRendererWebGL2 implements EmbeddingRenderer {
       { x: this.props.viewportX, y: this.props.viewportY, scale: this.props.viewportScale },
       this.props.width,
       this.props.height,
+      this.props.isGis,
     );
     this.renderInputs.mode.value = this.props.mode;
     this.renderInputs.colorScheme.value = this.props.colorScheme;
@@ -141,6 +143,7 @@ export class EmbeddingRendererWebGL2 implements EmbeddingRenderer {
     let positionMatrix: Matrix3 = [s, 0, 0, 0, s, 0, -x * s, -y * s, 1];
     let data = cmd.value(positionMatrix);
     let inv_matrix = matrix3_inverse(positionMatrix);
+    let isGis = this.props.isGis;
     df.destroy();
     return {
       data: data,
@@ -150,7 +153,7 @@ export class EmbeddingRendererWebGL2 implements EmbeddingRenderer {
         let tx = (x / width) * 2 - 1;
         let ty = (y / height) * 2 - 1;
         let r = matrix3_vector_mul_matrix([tx, ty, 1], inv_matrix);
-        return { x: r[0], y: r[1] };
+        return { x: r[0], y: isGis ? Viewport.unprojectLat(r[1]) : r[1] };
       },
     };
   }
@@ -245,11 +248,7 @@ function pointsRenderCommand(
 
         gl.bindFramebuffer(gl.FRAMEBUFFER, linearFB.framebuffer);
         gl.viewport(0, 0, linearFB.width, linearFB.height);
-        if (colorScheme == "light") {
-          gl.clearColor(1, 1, 1, 1);
-        } else {
-          gl.clearColor(0, 0, 0, 1);
-        }
+        gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
         paintDiscretePoints(matrix, Math.max(3, props.pointSize), props.pointAlpha * props.pointsAlpha, colorMatrix);
 
@@ -350,12 +349,7 @@ function densityRenderCommand(
         // Clear
         gl.bindFramebuffer(gl.FRAMEBUFFER, linearFB.framebuffer);
         gl.viewport(0, 0, linearFB.width, linearFB.height);
-        if (colorScheme == "light") {
-          gl.clearColor(1, 1, 1, 1);
-        } else {
-          gl.clearColor(0, 0, 0, 1);
-        }
-
+        gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
 
         // Draw points

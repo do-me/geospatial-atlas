@@ -1,5 +1,44 @@
-# Embedding Atlas
+# Geospatial Atlas
+This is a fork of [Embedding Atlas](https://apple.github.io/embedding-atlas) adapted for geospatial data. As embeddings or rather their 2D projections share the exact same visualization challenges like 2D geospatial data, Embedding Atlas and all it's functionality serve a great deal in geospatial data exploration!
 
+For now it's an early fork, with minimal changes to the original codebase. This repo is more of a PoC than a production-ready tool, even though it works perfectly for scatterplots in the 30M range!
+
+## Example screenshots
+
+![alt text](screenshots/image.png)
+![alt text](screenshots/image-1.png)
+![alt text](screenshots/image-2.png)
+
+## Installation
+
+```bash
+git clone https://github.com/dome/geospatial-atlas.git
+cd geospatial-atlas
+npm install
+npm run build
+```
+
+## Usage
+
+```bash
+cd packages/backend
+uv run embedding-atlas your_dataset_with_lat_lon_coords.parquet
+```
+
+## To Do
+
+- Fix panning (mouse is slightly slower than canvas in North-South direction)
+- Allow for zooming further in and disallow zooming out further than zoom level 0 to avoid weird effects
+- Adapt density and point radius ranges
+- Make basemap switchable as setting as URL
+- Add basemap attribution
+- Rename everything properly to "geospatial-atlas" (as I doubt that embedding-atlas project want to support geospatial data)
+- Release own "geospatial-atlas" pip package?
+- Test everything properly
+- And much more! Feel free to open PRs!
+
+Original Readme below.
+---
 [![NPM Version](https://img.shields.io/npm/v/embedding-atlas)](https://www.npmjs.com/package/embedding-atlas)
 [![PyPI - Version](https://img.shields.io/pypi/v/embedding-atlas)](https://pypi.org/project/embedding-atlas/)
 [![Paper](https://img.shields.io/badge/paper-arXiv:2505.06386-b31b1b.svg)](https://arxiv.org/abs/2505.06386)

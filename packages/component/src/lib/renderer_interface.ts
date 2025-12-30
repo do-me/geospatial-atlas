@@ -37,6 +37,7 @@ export interface EmbeddingRendererProps {
   downsampleMaxPoints: number | null;
   /** Density weight for downsampling (0-10). Default: 5 */
   downsampleDensityWeight: number;
+  isGis: boolean;
 }
 
 export interface DensityMap {

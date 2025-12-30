@@ -38,4 +38,6 @@ export interface EmbeddingViewConfig {
    * Higher values mean more aggressive culling in dense areas.
    * Default: 5 */
   downsampleDensityWeight?: number | null;
+  /** Enable GIS mode (Mercator projection for the Y axis). */
+  isGis?: boolean | null;
 }

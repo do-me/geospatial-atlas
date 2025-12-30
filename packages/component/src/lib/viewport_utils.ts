@@ -7,6 +7,7 @@ export class Viewport {
   private viewport: ViewportState;
   private width: number;
   private height: number;
+  private isGis: boolean;
 
   private _matrix: Matrix3 = [0, 0, 0, 0, 0, 0, 0, 0, 0];
   private _pixel_kx: number = 0;
@@ -14,17 +15,31 @@ export class Viewport {
   private _pixel_ky: number = 0;
   private _pixel_by: number = 0;
 
-  constructor(viewport: ViewportState, width: number, height: number) {
+  constructor(viewport: ViewportState, width: number, height: number, isGis: boolean = false) {
     this.viewport = viewport;
     this.width = width;
     this.height = height;
+    this.isGis = isGis;
     this.updateCoefficients();
   }
 
-  update(viewport: ViewportState, width: number, height: number) {
+  static projectLat(lat: number): number {
+    const latRad = (lat * Math.PI) / 180;
+    return (Math.log(Math.tan(Math.PI / 4 + latRad / 2)) * 180) / Math.PI;
+  }
+
+  static unprojectLat(y: number): number {
+    const yRad = (y * Math.PI) / 180;
+    return (2 * Math.atan(Math.exp(yRad)) - Math.PI / 2) * (180 / Math.PI);
+  }
+
+  update(viewport: ViewportState, width: number, height: number, isGis?: boolean) {
     this.viewport = viewport;
     this.width = width;
     this.height = height;
+    if (isGis !== undefined) {
+      this.isGis = isGis;
+    }
     this.updateCoefficients();
   }
 
@@ -53,11 +68,14 @@ export class Viewport {
   }
 
   pixelLocation(x: number, y: number): Point {
-    return { x: x * this._pixel_kx + this._pixel_bx, y: y * this._pixel_ky + this._pixel_by };
+    const py = this.isGis ? Viewport.projectLat(y) : y;
+    return { x: x * this._pixel_kx + this._pixel_bx, y: py * this._pixel_ky + this._pixel_by };
   }
 
   coordinateAtPixel(px: number, py: number): Point {
-    return { x: (px - this._pixel_bx) / this._pixel_kx, y: (py - this._pixel_by) / this._pixel_ky };
+    const x = (px - this._pixel_bx) / this._pixel_kx;
+    const y = (py - this._pixel_by) / this._pixel_ky;
+    return { x, y: this.isGis ? Viewport.unprojectLat(y) : y };
   }
 
   pixelLocationFunction(): (x: number, y: number) => Point {
@@ -65,7 +83,11 @@ export class Viewport {
     let ky = this._pixel_ky;
     let bx = this._pixel_bx;
     let by = this._pixel_by;
-    return (x, y) => ({ x: x * kx + bx, y: y * ky + by });
+    let isGis = this.isGis;
+    return (x, y) => {
+      const py = isGis ? Viewport.projectLat(y) : y;
+      return { x: x * kx + bx, y: py * ky + by };
+    };
   }
 
   coordinateAtPixelFunction(): (px: number, py: number) => Point {
@@ -73,6 +95,11 @@ export class Viewport {
     let ky = this._pixel_ky;
     let bx = this._pixel_bx;
     let by = this._pixel_by;
-    return (px, py) => ({ x: (px - bx) / kx, y: (py - by) / ky });
+    let isGis = this.isGis;
+    return (px, py) => {
+      const x = (px - bx) / kx;
+      const y = (py - by) / ky;
+      return { x, y: isGis ? Viewport.unprojectLat(y) : y };
+    };
   }
 }

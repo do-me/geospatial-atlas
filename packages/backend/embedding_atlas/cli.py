@@ -99,6 +99,20 @@ def find_available_port(start_port: int, max_attempts: int = 10, host="localhost
     raise RuntimeError("No available ports found in the given range")
 
 
+def find_gis_columns(columns):
+    cols_map = {c.lower(): c for c in columns}
+    pairs = [
+        ("longitude", "latitude"),
+        ("lon", "lat"),
+        ("lng", "lat"),
+        ("x", "y"),
+    ]
+    for x_cand, y_cand in pairs:
+        if x_cand in cols_map and y_cand in cols_map:
+            return cols_map[x_cand], cols_map[y_cand]
+    return None, None
+
+
 @click.command()
 @click.argument("inputs", nargs=-1, required=True)
 @click.option("--text", default=None, help="Column containing text data.")
@@ -291,7 +305,16 @@ def main(
 
     df = load_datasets(inputs, splits=split, sample=sample)
 
-    print(df)
+    is_gis = False
+    if x_column is None or y_column is None:
+        detected_x, detected_y = find_gis_columns(df.columns)
+        if detected_x is not None and detected_y is not None:
+            if x_column is None:
+                x_column = detected_x
+            if y_column is None:
+                y_column = detected_y
+            is_gis = True
+            print(f"Detected GIS columns: x={x_column}, y={y_column}")
 
     if enable_projection and (x_column is None or y_column is None):
         # No x, y column selected, first see if text/image/vectors column is specified, if not, ask for it
@@ -395,6 +418,7 @@ def main(
         point_size=point_size,
         stop_words=stop_words_resolved,
         labels=labels_resolved,
+        is_gis=is_gis,
     )
 
     metadata = {

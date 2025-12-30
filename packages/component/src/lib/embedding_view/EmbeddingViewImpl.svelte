@@ -98,6 +98,9 @@
   import StatusBar from "./StatusBar.svelte";
   import TooltipContainer from "./TooltipContainer.svelte";
 
+  import maplibregl from "maplibre-gl";
+  import "maplibre-gl/dist/maplibre-gl.css";
+
   import { defaultCategoryColors } from "../colors.js";
   import type { EmbeddingRenderer } from "../renderer_interface.js";
   import {
@@ -164,8 +167,20 @@
   let resolvedTheme = $derived(resolveTheme(theme, colorScheme));
   let resolvedCategoryColors = $derived(categoryColors ?? defaultCategoryColors(categoryCount));
 
+  let isGis = $derived(config?.isGis ?? false);
+  let internalDataY = $derived.by(() => {
+    if (isGis && data.y) {
+      const y = new Float32Array(data.y.length);
+      for (let i = 0; i < data.y.length; i++) {
+        y[i] = Viewport.projectLat(data.y[i]);
+      }
+      return y;
+    }
+    return data.y;
+  });
+
   let resolvedViewportState = $derived(viewportState ?? defaultViewportState ?? { x: 0, y: 0, scale: 1 });
-  let resolvedViewport = $derived(new Viewport(resolvedViewportState, width, height));
+  let resolvedViewport = $derived(new Viewport(resolvedViewportState, width, height, isGis));
   let pointLocation = $derived(resolvedViewport.pixelLocationFunction());
   let coordinateAtPoint = $derived(resolvedViewport.coordinateAtPixelFunction());
 
@@ -221,6 +236,9 @@
   let renderer: EmbeddingRenderer | null = $state(null);
   let webGPUPrompt: string | null = $state(null);
 
+  let mapContainer: HTMLElement | undefined = $state();
+  let map: maplibregl.Map | undefined = $state();
+
   let minimumDensity = $derived(config?.minimumDensity ?? 1 / 16);
   let userPointSize = $derived(config?.pointSize ?? null);
   let mode = $derived(config?.mode ?? "points");
@@ -254,12 +272,13 @@
       width: pixelWidth,
       height: pixelHeight,
       x: data.x,
-      y: data.y,
+      y: internalDataY,
       category: data.category,
       categoryCount,
       categoryColors: resolvedCategoryColors,
       downsampleMaxPoints,
       downsampleDensityWeight,
+      isGis,
       ...viewingParams,
     });
 
@@ -380,6 +399,24 @@
 
   $effect.pre(() => syncViewportState(defaultViewportState));
 
+  $effect(() => {
+    if (map && resolvedViewportState) {
+      const { x, y, scale } = resolvedViewportState;
+      const zoom = Math.log2((360 * scale * width) / 1024);
+
+      map.jumpTo({
+        center: [x, isGis ? Viewport.unprojectLat(y) : y],
+        zoom: zoom,
+      });
+    }
+  });
+
+  $effect(() => {
+    if (map && width && height) {
+      map.resize();
+    }
+  });
+
   onMount(() => {
     if (canvas == null) {
       return;
@@ -389,6 +426,17 @@
     } else {
       setupWebGLRenderer(canvas);
       webGPUPrompt = "WebGPU is unavailable. Falling back to WebGL.";
+    }
+
+    if (mapContainer) {
+      map = new maplibregl.Map({
+        container: mapContainer,
+        style: "https://tiles.openfreemap.org/styles/liberty",
+        center: [resolvedViewportState.x, resolvedViewportState.y],
+        zoom: 0,
+        interactive: false,
+        attributionControl: false,
+      });
     }
   });
 
@@ -564,8 +612,10 @@
     if (renderer == null || position == null || querySelection == null) {
       return null;
     }
-    let { x, y } = coordinateAtPoint(position.x, position.y);
-    let r = Math.abs(coordinateAtPoint(position.x + 1, position.y).x - x);
+    const { x, y } = coordinateAtPoint(position.x, position.y);
+    const dLon = Math.abs(coordinateAtPoint(position.x + 1, position.y).x - x);
+    const dLat = Math.abs(coordinateAtPoint(position.x, position.y + 1).y - y);
+    const r = Math.max(dLon, dLat);
     return await querySelection(x, y, r);
   }
 
@@ -697,7 +747,23 @@
 </script>
 
 <div style:width="{width}px" style:height="{height}px" style:position="relative">
-  <canvas bind:this={canvas} style:position="absolute" style:top="0" style:left="0"></canvas>
+  <div
+    bind:this={mapContainer}
+    style:width="100%"
+    style:height="100%"
+    style:position="absolute"
+    style:top="0"
+    style:left="0"
+    style:z-index="0"
+  ></div>
+  <canvas
+    bind:this={canvas}
+    style:position="absolute"
+    style:top="0"
+    style:left="0"
+    style:z-index="1"
+    style:pointer-events="none"
+  ></canvas>
   <div style:width="{width}px" style:height="{height}px" style:position="absolute" style:top="0" style:left="0">
     {#if customOverlay}
       {@const action = customComponentAction(customOverlay)}

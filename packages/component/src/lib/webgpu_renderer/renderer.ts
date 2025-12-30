@@ -73,6 +73,7 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
 
       downsampleMaxPoints: 4000000,
       downsampleDensityWeight: 5,
+      isGis: false,
     };
 
     this.viewport = new Viewport({ x: 0, y: 0, scale: 1 }, width, height);
@@ -124,6 +125,7 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
       { x: this.props.viewportX, y: this.props.viewportY, scale: this.props.viewportScale },
       this.props.width,
       this.props.height,
+      this.props.isGis,
     );
     this.renderInputs.mode.value = this.props.mode;
     this.renderInputs.colorScheme.value = this.props.colorScheme;
@@ -171,6 +173,7 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
       this.dataBuffers,
     );
     let data = await cmd.value();
+    let isGis = this.props.isGis;
     subgraph.destroy();
     return {
       data: data,
@@ -180,7 +183,7 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
         let tx = (x / width) * 2 - 1;
         let ty = (y / height) * 2 - 1;
         let r = matrix3_vector_mul_matrix([tx, ty, 1], inv_matrix);
-        return { x: r[0], y: r[1] };
+        return { x: r[0], y: isGis ? Viewport.unprojectLat(r[1]) : r[1] };
       },
     };
   }
@@ -396,7 +399,7 @@ function makeRenderCommand(
       kde_coeffs,
     ) =>
       (props, textureView) => {
-        let backgroundColor: Vector4 = props.colorScheme == "light" ? [1, 1, 1, 1] : [0, 0, 0, 1];
+        let backgroundColor: Vector4 = props.colorScheme == "light" ? [1, 1, 1, 0] : [0, 0, 0, 0];
         let scalerX = props.width / fbWidth;
         let scalerY = props.height / fbHeight;
         let safeMarginAdjustmentMatrix: Matrix3 = [scalerX, 0, 0, 0, scalerY, 0, 0, 0, 1];

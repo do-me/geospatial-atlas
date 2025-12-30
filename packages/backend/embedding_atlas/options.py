@@ -67,6 +67,7 @@ class EmbeddingAtlasOptions(TypedDict, total=False):
     show_table: bool | None
     show_charts: bool | None
     show_embedding: bool | None
+    is_gis: bool | None
 
 
 def make_embedding_atlas_props(**options: Unpack[EmbeddingAtlasOptions]) -> dict:
@@ -102,7 +103,10 @@ def make_embedding_atlas_props(**options: Unpack[EmbeddingAtlasOptions]) -> dict
     set_prop("data.table", options.get("table"))
     set_prop("data.id", options.get("row_id"))
     if options.get("x") is not None and options.get("y") is not None:
-        set_prop("data.projection", {"x": options.get("x"), "y": options.get("y")})
+        set_prop(
+            "data.projection",
+            {"x": options.get("x"), "y": options.get("y"), "isGis": options.get("is_gis")},
+        )
     set_prop("data.text", options.get("text"))
     set_prop("data.neighbors", options.get("neighbors"))
 

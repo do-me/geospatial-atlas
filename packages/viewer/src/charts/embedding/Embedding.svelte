@@ -220,6 +220,7 @@
       colorScheme: $colorScheme,
       ...context.embeddingViewConfig,
       mode: spec.mode ?? "points",
+      isGis: spec.data.isGis,
       ...(spec.minimumDensity != null ? { minimumDensity: spec.minimumDensity } : {}),
       ...(spec.pointSize != null ? { pointSize: spec.pointSize } : {}),
       downsampleMaxPoints: spec.downsampleMaxPoints ?? defaultDownsampleMaxPoints,
