@@ -1,10 +1,12 @@
 # Geospatial Atlas
 This is a fork of [Embedding Atlas](https://apple.github.io/embedding-atlas) adapted for geospatial data. As embeddings or rather their 2D projections share the exact same visualization challenges like 2D geospatial data, Embedding Atlas and all it's functionality serve a great deal in geospatial data exploration!
 
-For now it's an early fork, with minimal changes to the original codebase. This repo is more of a PoC than a production-ready tool, even though it works perfectly for scatterplots in the 30M range!
+For now it's an early fork, with minimal changes to the original codebase. This repo is more of a PoC than a production-ready tool, even though it works perfectly for scatterplots even in the 100M range!
 
 ## Example screenshots
 
+![alt text](screenshots/image-4.png)
+![alt text](screenshots/image-3.png)
 ![alt text](screenshots/image.png)
 ![alt text](screenshots/image-1.png)
 ![alt text](screenshots/image-2.png)
@@ -24,7 +26,9 @@ npm run build
 cd packages/backend
 uv run embedding-atlas your_dataset_with_lat_lon_coords.parquet
 ```
-The screenshots above were created with [this dataset](https://huggingface.co/datasets/do-me/50k_poorly_geocoded_news) you can download with one click from [this url](https://huggingface.co/datasets/do-me/50k_poorly_geocoded_news/resolve/main/geocoded_news.parquet).
+The screenshots above were created with these two datasets:
+- [Foursquare 100M Places](https://huggingface.co/datasets/do-me/foursquare_places_100M), [direct download]()
+- [50k poorly geocoded news](https://huggingface.co/datasets/do-me/50k_poorly_geocoded_news), [direct download](https://huggingface.co/datasets/do-me/50k_poorly_geocoded_news/resolve/main/geocoded_news.parquet)
 
 ## To Do
 
