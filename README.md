@@ -18,12 +18,13 @@ npm install
 npm run build
 ```
 
-## Usage
+## Usage (after installation above)
 
 ```bash
 cd packages/backend
 uv run embedding-atlas your_dataset_with_lat_lon_coords.parquet
 ```
+The screenshots above were created with [this dataset](https://huggingface.co/datasets/do-me/50k_poorly_geocoded_news) you can download with one click from [this url](https://huggingface.co/datasets/do-me/50k_poorly_geocoded_news/resolve/main/geocoded_news.parquet).
 
 ## To Do
 
