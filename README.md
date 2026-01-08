@@ -16,7 +16,7 @@ For now it's an early fork, with minimal changes to the original codebase. This 
 ## Installation
 
 ```bash
-git clone https://github.com/dome/geospatial-atlas.git
+git clone https://github.com/do-me/geospatial-atlas.git
 cd geospatial-atlas
 npm install
 npm run build
