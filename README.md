@@ -26,8 +26,9 @@ npm run build
 
 ```bash
 cd packages/backend
-uv run embedding-atlas your_dataset_with_lat_lon_coords.parquet
+uv run embedding-atlas your_dataset_with_lat_lon_coords.parquet --text your_name_column
 ```
+
 The screenshots above were created with these two datasets:
 - [Foursquare 100M Places](https://huggingface.co/datasets/do-me/foursquare_places_100M), [direct download]()
 - [50k poorly geocoded news](https://huggingface.co/datasets/do-me/50k_poorly_geocoded_news), [direct download](https://huggingface.co/datasets/do-me/50k_poorly_geocoded_news/resolve/main/geocoded_news.parquet)
