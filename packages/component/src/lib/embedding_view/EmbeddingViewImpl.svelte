@@ -470,8 +470,15 @@
   function onZoom(scaler: number, position: Point) {
     let { x, y, scale } = resolvedViewportState;
     setTooltip(null);
-    let maxScale = (defaultViewportState?.scale ?? 1) * 1e2;
-    let minScale = (defaultViewportState?.scale ?? 1) * 1e-2;
+    let maxScale: number;
+    let minScale: number;
+    if (isGis) {
+      maxScale = Infinity;
+      minScale = 1024 / (360 * width);
+    } else {
+      maxScale = (defaultViewportState?.scale ?? 1) * 1e2;
+      minScale = (defaultViewportState?.scale ?? 1) * 1e-2;
+    }
     let newScale = Math.min(maxScale, Math.max(minScale, scale * scaler));
     let rect = canvas!.getBoundingClientRect();
     let sz = Math.max(rect.width, rect.height);
