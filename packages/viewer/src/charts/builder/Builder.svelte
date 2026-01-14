@@ -5,6 +5,7 @@
 
   import CodeEditor from "../../widgets/CodeEditor.svelte";
   import Select from "../../widgets/Select.svelte";
+  import Switch from "../../widgets/Switch.svelte";
   import ChartView from "../ChartView.svelte";
   import Container from "../common/Container.svelte";
   import ChartIcon from "./ChartIcon.svelte";
@@ -42,6 +43,16 @@
         if (current != null && allowedColumns.findIndex(({ name }) => name == current) >= 0) {
           newValues[item.field.key] = current;
         }
+      } else if ("boolean" in item) {
+        let defaultValue = false;
+        if (item.boolean.key === "isGis" && context.embeddingViewConfig?.isGis) {
+          defaultValue = true;
+        }
+        newValues[item.boolean.key] = currentValues[item.boolean.key] ?? defaultValue;
+      } else if ("code" in item) {
+        newValues[item.code.key] = currentValues[item.code.key] ?? "";
+      } else if ("spec" in item) {
+        newValues[item.spec.key] = currentValues[item.spec.key] ?? {};
       }
     }
     // Setting values should trigger validation and update the spec.
@@ -186,6 +197,10 @@
           colorScheme={$colorScheme}
         />
       </div>
+    {/if}
+    {#if "boolean" in elem}
+      {@const key = elem.boolean.key}
+      <Switch label={elem.boolean.label} value={values[key]} onChange={(v) => (values[key] = v)} />
     {/if}
   {/each}
   {#if localChartSpec != null && builder.preview !== false}

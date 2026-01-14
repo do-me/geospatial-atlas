@@ -245,7 +245,9 @@
   let autoLabelEnabled = $derived(config?.autoLabelEnabled);
   let downsampleMaxPoints = $derived(config?.downsampleMaxPoints ?? 4000000);
   let downsampleDensityWeight = $derived(config?.downsampleDensityWeight ?? 5);
-  let mapStyle = $derived(config?.mapStyle ?? "https://tiles.openfreemap.org/styles/liberty");
+  let mapStyle = $derived(
+    isGis ? (config?.mapStyle !== undefined ? config.mapStyle : "https://tiles.openfreemap.org/styles/liberty") : null,
+  );
 
   let viewingParams = $derived(
     viewingParameters(
@@ -419,8 +421,25 @@
   });
 
   $effect(() => {
-    if (map && mapStyle) {
-      map.setStyle(mapStyle);
+    if (mapContainer && mapStyle) {
+      if (!map) {
+        map = new maplibregl.Map({
+          container: mapContainer,
+          style: mapStyle,
+          center: [
+            resolvedViewportState.x,
+            isGis ? Viewport.unprojectLat(resolvedViewportState.y) : resolvedViewportState.y,
+          ],
+          zoom: Math.log2((360 * resolvedViewportState.scale * width) / 1024),
+          interactive: false,
+          attributionControl: false,
+        });
+      } else {
+        map.setStyle(mapStyle);
+      }
+    } else if (map && !mapStyle) {
+      map.remove();
+      map = undefined;
     }
   });
 
@@ -434,25 +453,15 @@
       setupWebGLRenderer(canvas);
       webGPUPrompt = "WebGPU is unavailable. Falling back to WebGL.";
     }
-
-    if (mapContainer) {
-      map = new maplibregl.Map({
-        container: mapContainer,
-        style: mapStyle,
-        center: [
-          resolvedViewportState.x,
-          isGis ? Viewport.unprojectLat(resolvedViewportState.y) : resolvedViewportState.y,
-        ],
-        zoom: 0,
-        interactive: false,
-        attributionControl: false,
-      });
-    }
   });
 
   onDestroy(() => {
     renderer?.destroy();
     renderer = null;
+    if (map) {
+      map.remove();
+      map = undefined;
+    }
   });
 
   function localCoordinates(e: { clientX: number; clientY: number }): Point {
@@ -775,6 +784,7 @@
     style:top="0"
     style:left="0"
     style:z-index="0"
+    style:background-color={isGis && !mapStyle ? "black" : undefined}
   ></div>
   <canvas
     bind:this={canvas}

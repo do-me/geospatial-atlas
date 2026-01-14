@@ -6,9 +6,17 @@
     placeholder?: string;
     className?: string;
     onEnter?: () => void;
+    disabled?: boolean;
   }
 
-  let { value = $bindable(), type = "text", placeholder = "", className = "", onEnter }: Props = $props();
+  let {
+    value = $bindable(),
+    type = "text",
+    placeholder = "",
+    className = "",
+    onEnter,
+    disabled = false,
+  }: Props = $props();
 
   function onKeyDown(e: KeyboardEvent) {
     if (e.key == "Escape") {
@@ -24,6 +32,7 @@
   bind:value={value}
   placeholder={placeholder}
   onkeydown={onKeyDown}
-  class="form-input rounded-md py-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 {className ??
+  disabled={disabled}
+  class="form-input rounded-md py-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 disabled:opacity-50 {className ??
     ''}"
 />

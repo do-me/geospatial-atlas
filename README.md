@@ -1,13 +1,14 @@
 # Geospatial Atlas
 This is a fork of [Embedding Atlas](https://apple.github.io/embedding-atlas) adapted for geospatial data. As embeddings or rather their 2D projections share the exact same visualization challenges like 2D geospatial data, Embedding Atlas and all its functionality serve a great deal in geospatial data exploration!
 
-For now it's an early fork, with minimal changes to the original codebase. This repo is more of a PoC than a production-ready tool, even though it works perfectly for scatterplots even in the 100M range! Most of the original features should work but if you find a bug or anything not listed on the To-Do-Section below, please open an issue or a PR. 
+For now it's an early fork, with minimal changes to the original codebase. This repo is more of a PoC than a production-ready tool, even though it works perfectly for scatterplots even in the 100M range! Most of the original features should work but if you find a bug or anything not listed on the To-Do-Section below, please open an issue or a PR.
 
 [LinkedIn Post for more context](https://www.linkedin.com/posts/dominik-weckm%C3%BCller_geospatial-atlas-is-born-explore-100m-points-activity-7411826555179429890-CiHX?utm_source=share&utm_medium=member_desktop&rcm=ACoAAC8q3V4BiZXfSx0JnRGDOF3d6Fzu4HdRtDE)
 
 ## Example screenshots
 
 ![alt text](screenshots/image-4.png)
+![alt text](screenshots/image-5.png)
 ![alt text](screenshots/image-3.png)
 ![alt text](screenshots/image.png)
 ![alt text](screenshots/image-1.png)

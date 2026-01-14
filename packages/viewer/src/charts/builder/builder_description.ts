@@ -25,6 +25,12 @@ export type UIElement =
       };
     }
   | {
+      boolean: {
+        key: string;
+        label: string;
+      };
+    }
+  | {
       spec: { key: string };
     };
 
@@ -35,9 +41,11 @@ type UIValue<E> = E extends { field: { key: infer K extends string; required: tr
     ? { [P in K]: Field | undefined }
     : E extends { code: { key: infer K extends string } }
       ? { [P in K]: string }
-      : E extends { spec: { key: infer K extends string } }
-        ? { [P in K]: ChartSpec }
-        : never;
+      : E extends { boolean: { key: infer K extends string } }
+        ? { [P in K]: boolean }
+        : E extends { spec: { key: infer K extends string } }
+          ? { [P in K]: ChartSpec }
+          : never;
 
 type UnionToIntersection<U> = (U extends any ? (x: U) => void : never) extends (x: infer I) => void ? I : never;
 type UIValues<A extends readonly UIElement[]> = UnionToIntersection<UIValue<A[number]>>;

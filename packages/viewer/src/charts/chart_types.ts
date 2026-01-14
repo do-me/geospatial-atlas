@@ -324,9 +324,10 @@ registerChartBuilder({
     { field: { key: "y", label: "Y Field", types: ["number"], required: true } }, //
     { field: { key: "text", label: "Text Field", types: ["string"] } }, //
     { field: { key: "category", label: "Category Field", types: ["string", "number"] } }, //
+    { boolean: { key: "isGis", label: "GIS Mode" } },
   ] as const,
   preview: false,
-  create: ({ x, y, text, category }, context): EmbeddingSpec | undefined => ({
+  create: ({ x, y, text, category, isGis }, context): EmbeddingSpec | undefined => ({
     type: "embedding",
     title: "Embedding",
     data: {
@@ -334,6 +335,7 @@ registerChartBuilder({
       y: y.name,
       text: text?.name,
       category: category?.name,
+      isGis: !!isGis,
     },
   }),
 });

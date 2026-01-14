@@ -50,6 +50,7 @@
   import PopupButton from "../../widgets/PopupButton.svelte";
   import Select from "../../widgets/Select.svelte";
   import Slider from "../../widgets/Slider.svelte";
+  import Switch from "../../widgets/Switch.svelte";
   import Legend from "./Legend.svelte";
 
   import { IconSettings } from "../../assets/icons.js";
@@ -300,14 +301,32 @@
       <PopupButton icon={IconSettings} title="Options">
         <div class="flex flex-col gap-2 w-64">
           {#if spec.data.isGis}
-            <div class="text-slate-500 dark:text-slate-400 select-none">Basemap Style</div>
+            <div class="flex items-center justify-between">
+              <div class="text-slate-500 dark:text-slate-400 select-none">Basemap Style</div>
+              <Switch
+                label="Show"
+                value={spec.mapStyle !== null}
+                onChange={(v) => {
+                  if (v) {
+                    onSpecChange({ mapStyle: mapStyleInput || defaultMapStyle });
+                  } else {
+                    onSpecChange({ mapStyle: null });
+                  }
+                }}
+              />
+            </div>
             <div class="flex gap-2 items-center">
               <Input
                 className="w-full"
+                disabled={spec.mapStyle === null}
                 bind:value={mapStyleInput}
                 onEnter={() => onSpecChange({ mapStyle: mapStyleInput })}
               />
-              <Button label="Set" onClick={() => onSpecChange({ mapStyle: mapStyleInput })} />
+              <Button
+                label="Set"
+                disabled={spec.mapStyle === null}
+                onClick={() => onSpecChange({ mapStyle: mapStyleInput })}
+              />
             </div>
           {/if}
           <div class="text-slate-500 dark:text-slate-400 select-none">Display Mode</div>
