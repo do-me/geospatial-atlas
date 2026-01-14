@@ -542,7 +542,10 @@
         let c0 = coordinateAtPoint(0, 0);
         let c1 = coordinateAtPoint(1, 1);
         let sx = c0.x - c1.x;
-        let sy = c0.y - c1.y;
+        // In GIS mode, the y coordinate return by coordinateAtPoint is unprojected (latitude).
+        // However, the viewport state uses projected y coordinate (Mercator).
+        // Since the projection is isotropic, we can use the x scale (which is linear) to determine the y scale.
+        let sy = isGis ? -sx : c0.y - c1.y;
         let x0 = resolvedViewportState.x;
         let y0 = resolvedViewportState.y;
         return {
