@@ -245,6 +245,7 @@
   let autoLabelEnabled = $derived(config?.autoLabelEnabled);
   let downsampleMaxPoints = $derived(config?.downsampleMaxPoints ?? 4000000);
   let downsampleDensityWeight = $derived(config?.downsampleDensityWeight ?? 5);
+  let mapStyle = $derived(config?.mapStyle ?? "https://tiles.openfreemap.org/styles/liberty");
 
   let viewingParams = $derived(
     viewingParameters(
@@ -417,6 +418,12 @@
     }
   });
 
+  $effect(() => {
+    if (map && mapStyle) {
+      map.setStyle(mapStyle);
+    }
+  });
+
   onMount(() => {
     if (canvas == null) {
       return;
@@ -431,8 +438,11 @@
     if (mapContainer) {
       map = new maplibregl.Map({
         container: mapContainer,
-        style: "https://tiles.openfreemap.org/styles/liberty",
-        center: [resolvedViewportState.x, resolvedViewportState.y],
+        style: mapStyle,
+        center: [
+          resolvedViewportState.x,
+          isGis ? Viewport.unprojectLat(resolvedViewportState.y) : resolvedViewportState.y,
+        ],
         zoom: 0,
         interactive: false,
         attributionControl: false,

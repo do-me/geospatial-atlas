@@ -46,6 +46,7 @@
   import { cubicOut } from "svelte/easing";
 
   import Button from "../../widgets/Button.svelte";
+  import Input from "../../widgets/Input.svelte";
   import PopupButton from "../../widgets/PopupButton.svelte";
   import Select from "../../widgets/Select.svelte";
   import Slider from "../../widgets/Slider.svelte";
@@ -63,6 +64,7 @@
   const defaultMinimumDensity = 1 / 16;
   const defaultDownsampleMaxPoints = 4000000;
   const minDownsampleMaxPoints = 50000;
+  const defaultMapStyle = "https://tiles.openfreemap.org/styles/liberty";
 
   let {
     context,
@@ -96,6 +98,11 @@
   let tooltip = $state.raw<DataPoint | null>(null);
   let selection = $state.raw<DataPoint[] | null>(null);
   let overlayProps = $state.raw<{ center: DataPoint | null; points: DataPoint[] } | null>(null);
+
+  let mapStyleInput = $state(spec.mapStyle ?? defaultMapStyle);
+  $effect(() => {
+    mapStyleInput = spec.mapStyle ?? defaultMapStyle;
+  });
 
   // Update the category mapping and legend.
   $effect.pre(() => {
@@ -221,6 +228,7 @@
       ...context.embeddingViewConfig,
       mode: spec.mode ?? "points",
       isGis: spec.data.isGis,
+      mapStyle: spec.mapStyle,
       ...(spec.minimumDensity != null ? { minimumDensity: spec.minimumDensity } : {}),
       ...(spec.pointSize != null ? { pointSize: spec.pointSize } : {}),
       downsampleMaxPoints: spec.downsampleMaxPoints ?? defaultDownsampleMaxPoints,
@@ -291,6 +299,17 @@
       />
       <PopupButton icon={IconSettings} title="Options">
         <div class="flex flex-col gap-2 w-64">
+          {#if spec.data.isGis}
+            <div class="text-slate-500 dark:text-slate-400 select-none">Basemap Style</div>
+            <div class="flex gap-2 items-center">
+              <Input
+                className="w-full"
+                bind:value={mapStyleInput}
+                onEnter={() => onSpecChange({ mapStyle: mapStyleInput })}
+              />
+              <Button label="Set" onClick={() => onSpecChange({ mapStyle: mapStyleInput })} />
+            </div>
+          {/if}
           <div class="text-slate-500 dark:text-slate-400 select-none">Display Mode</div>
           <div class="flex gap-2 items-center">
             <Select

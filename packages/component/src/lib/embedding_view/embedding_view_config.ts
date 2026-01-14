@@ -42,4 +42,7 @@ export interface EmbeddingViewConfig {
   downsampleDensityWeight?: number | null;
   /** Enable GIS mode (Mercator projection for the Y axis). */
   isGis?: boolean | null;
+
+  /** MapLibre style URL. */
+  mapStyle?: string | null;
 }
