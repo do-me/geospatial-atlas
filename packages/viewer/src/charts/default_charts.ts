@@ -115,9 +115,9 @@ export async function defaultCharts(options: {
       }
       case "string[]": {
         charts.push({
-          type: "count-plot-list",
+          type: "count-plot",
           title: item.name,
-          data: { field: item.name },
+          data: { field: item.name, isList: true },
         });
         break;
       }
