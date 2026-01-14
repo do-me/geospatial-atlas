@@ -265,7 +265,7 @@
       }
     }}
   />
-  <div class="absolute top-0 left-0 right-0 flex flex-wrap justify-between items-start pointer-events-none">
+  <div class="absolute top-0 left-0 right-0 flex flex-wrap justify-between items-start pointer-events-none z-10">
     {#if categoryLegend != null}
       <div
         class="flex-none m-2 p-2 rounded-md bg-slate-100/75 dark:bg-slate-800/75 backdrop-blur-sm pointer-events-auto order-3"

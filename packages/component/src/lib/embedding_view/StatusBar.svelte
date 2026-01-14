@@ -38,6 +38,7 @@
   style:font-family={resolvedTheme.fontFamily}
   style:display="flex"
   style:flex-direction="row"
+  style:z-index="10"
 >
   <div
     style:flex="none"
