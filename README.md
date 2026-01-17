@@ -25,7 +25,15 @@ npm run build
 
 ## Usage (after installation above)
 
+Currently the parquet files require both a `lat` and `lon` column. A Geometry column is not being parsed at the moment (but can be implemented fairly easily). Preprocessing with DuckDB is recommended.
+
+Execute this command directly from the root directory of the repository.
 ```bash
+uv --directory packages/backend run embedding-atlas your_dataset_with_lat_lon_coords.parquet --text your_name_column
+```
+
+Alternatively you can cd into the backend folder and run it from there:
+```
 cd packages/backend
 uv run embedding-atlas your_dataset_with_lat_lon_coords.parquet --text your_name_column
 ```
