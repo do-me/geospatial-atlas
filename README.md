@@ -44,10 +44,8 @@ The screenshots above were created with these two datasets:
 
 ## To Do
 
-- Fix panning (mouse is slightly slower than canvas in North-South direction)
-- Allow for zooming further in and disallow zooming out further than zoom level 0 to avoid weird effects
+- Disallow zooming out further than zoom level 0 to avoid weird shifting effects
 - Adapt density and point radius ranges
-- Make basemap switchable as setting as URL
 - Add basemap attribution
 - Rename everything properly to "geospatial-atlas" (as I doubt that embedding-atlas project want to support geospatial data)
 - Release own "geospatial-atlas" pip package?
