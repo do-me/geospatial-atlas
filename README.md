@@ -1,7 +1,9 @@
 # Geospatial Atlas
 This is a fork of [Embedding Atlas](https://apple.github.io/embedding-atlas) adapted for geospatial data. As embeddings or rather their 2D projections share the exact same visualization challenges like 2D geospatial data, Embedding Atlas and all its functionality serve a great deal in geospatial data exploration!
 
-For now it's an early fork, with minimal changes to the original codebase. This repo is more of a PoC than a production-ready tool, even though it works perfectly for scatterplots even in the 100M range! Most of the original features should work but if you find a bug or anything not listed on the To-Do-Section below, please open an issue or a PR.
+It can **visualize up to ~200M points** in your WebGPU-enabled browser! Make sure to use Chrome, Safari or activate the flag in Firefox. 
+
+Find various example apps [here](https://github.com/do-me/geospatial-atlas-apps). Try for example the [6M GlobalGeoTree explorer](https://do-me.github.io/geospatial-atlas-apps/GlobalGeoTree/)!
 
 [LinkedIn Post for more context](https://www.linkedin.com/posts/dominik-weckm%C3%BCller_geospatial-atlas-is-born-explore-100m-points-activity-7411826555179429890-CiHX?utm_source=share&utm_medium=member_desktop&rcm=ACoAAC8q3V4BiZXfSx0JnRGDOF3d6Fzu4HdRtDE)
 
@@ -25,7 +27,7 @@ npm run build
 
 ## Usage (after installation above)
 
-Currently the parquet files require both a `lat` and `lon` column. A Geometry column is not being parsed at the moment (but can be implemented fairly easily). Preprocessing with DuckDB is recommended.
+Currently the parquet files require both a `lat` (or latitude) and `lon` (or longitude) column. A Geometry column is not being parsed at the moment (but can be implemented fairly easily with DuckDB spatial). Preprocessing with DuckDB is recommended.
 
 Execute this command directly from the root directory of the repository.
 ```bash
