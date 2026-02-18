@@ -30,6 +30,7 @@ interface Metadata {
     type: "wasm" | "socket" | "rest";
     uri?: string;
     load?: boolean;
+    files?: string[];
   };
 }
 
@@ -61,10 +62,17 @@ export class BackendDataSource implements DataSource {
 
     if (metadata.database?.load) {
       onStatus("Loading data...");
-      let datasetUrl = joinUrl(this.serverUrl, "dataset.parquet");
-      await coordinator.exec(`
-        CREATE OR REPLACE TABLE ${table} AS (SELECT * FROM read_parquet(${SQL.literal(datasetUrl)}));
-      `);
+      const files = metadata.database?.files ?? ["dataset.parquet"];
+      const datasetUrls = files.map((f: string) => joinUrl(this.serverUrl, f));
+
+      let loadQuery;
+      if (datasetUrls.length === 1) {
+        loadQuery = `CREATE OR REPLACE TABLE ${table} AS (SELECT * FROM read_parquet(${SQL.literal(datasetUrls[0])}));`;
+      } else {
+        const urlsList = datasetUrls.map((url: string) => SQL.literal(url)).join(", ");
+        loadQuery = `CREATE OR REPLACE TABLE ${table} AS (SELECT * FROM read_parquet([${urlsList}]));`;
+      }
+      await coordinator.exec(loadQuery);
     }
 
     if (!metadata.isStatic) {
