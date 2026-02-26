@@ -25,6 +25,12 @@ npm install
 npm run build
 ```
 
+Running on an Intel Mac? Then add this line to `packages/backend/pyproject.toml`:
+
+`required-environments = ["sys_platform == 'darwin' and platform_machine == 'x86_64'"]`
+
+For Windows, Silicon Macs and Linux everything should work out of the box.
+
 ## Usage (after installation above)
 
 Currently the parquet files require both a `lat` (or latitude) and `lon` (or longitude) column. A Geometry column is not being parsed at the moment (but can be implemented fairly easily with DuckDB spatial). Preprocessing with DuckDB is recommended.
