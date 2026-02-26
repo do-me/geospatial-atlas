@@ -3,13 +3,13 @@
 layout: home
 
 hero:
-  name: Embedding Atlas
-  text: Scalable, Interactive Visualization
-  tagline: Compute & interactively visualize large embeddings.
+  name: Geospatial Atlas
+  text: Scalable, Interactive Geospatial Visualization
+  tagline: Explore large geospatial embeddings with basemap support, GIS projections & interactive filtering.
   image:
     light: ./assets/embedding-light.png
     dark: ./assets/embedding-dark.png
-    alt: a screenshot of embedding atlas
+    alt: a screenshot of geospatial atlas
   actions:
     - theme: brand
       text: Demo

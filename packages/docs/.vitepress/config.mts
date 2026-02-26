@@ -4,10 +4,10 @@ import docComment from "./doc_comment.mjs";
 
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
-  base: process.env["EMBEDDING_ATLAS_BASE"] ?? "/embedding-atlas/",
-  title: "Embedding Atlas",
+  base: process.env["EMBEDDING_ATLAS_BASE"] ?? "/geospatial-atlas/",
+  title: "Geospatial Atlas",
   description:
-    "Interactive visualizations for large-scale embeddings. Effortlessly explore, filter, and search through rich metadata.",
+    "Interactive geospatial visualizations for large-scale embeddings with basemap support. Effortlessly explore, filter, and search through rich metadata.",
   head: [
     ["link", { rel: "icon", href: "${base}favicon.svg", media: "(prefers-color-scheme: light)" }],
     ["link", { rel: "icon", href: "${base}favicon_dark.svg", media: "(prefers-color-scheme: dark)" }],
@@ -53,9 +53,9 @@ export default defineConfig({
         items: [{ text: "Development Instructions", link: "/develop" }],
       },
     ],
-    socialLinks: [{ icon: "github", link: "https://github.com/apple/embedding-atlas" }],
+    socialLinks: [{ icon: "github", link: "https://github.com/do-me/geospatial-atlas" }],
     footer: {
-      copyright: "Copyright © 2025 Apple Inc. Released under the MIT license.",
+      copyright: "Geospatial Atlas — fork of Embedding Atlas by Apple Inc. Released under the MIT license.",
     },
   },
   vite: {
