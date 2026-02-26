@@ -3,7 +3,7 @@ This is a fork of [Embedding Atlas](https://apple.github.io/embedding-atlas) ada
 
 It can **visualize up to ~200M points** in your WebGPU-enabled browser! Make sure to use Chrome, Safari or activate the flag in Firefox.
 
-Find various example apps [here](https://github.com/do-me/geospatial-atlas-apps). Try for example the [6M GlobalGeoTree explorer](https://do-me.github.io/geospatial-atlas-apps/GlobalGeoTree/)!
+Find various example apps [here](https://github.com/do-me/geospatial-atlas-apps). Try for example the [6M GlobalGeoTree explorer](https://do-me.github.io/geospatial-atlas-apps/GlobalGeoTree/)! Load your own data (up to around 6M points) here: https://do-me.github.io/geospatial-atlas/app/!
 
 [LinkedIn Post for more context](https://www.linkedin.com/posts/dominik-weckm%C3%BCller_geospatial-atlas-is-born-explore-100m-points-activity-7411826555179429890-CiHX?utm_source=share&utm_medium=member_desktop&rcm=ACoAAC8q3V4BiZXfSx0JnRGDOF3d6Fzu4HdRtDE)
 
