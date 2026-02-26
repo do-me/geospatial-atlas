@@ -1,7 +1,7 @@
 # Geospatial Atlas
 This is a fork of [Embedding Atlas](https://apple.github.io/embedding-atlas) adapted for geospatial data. As embeddings or rather their 2D projections share the exact same visualization challenges like 2D geospatial data, Embedding Atlas and all its functionality serve a great deal in geospatial data exploration!
 
-It can **visualize up to ~200M points** in your WebGPU-enabled browser! Make sure to use Chrome, Safari or activate the flag in Firefox. 
+It can **visualize up to ~200M points** in your WebGPU-enabled browser! Make sure to use Chrome, Safari or activate the flag in Firefox.
 
 Find various example apps [here](https://github.com/do-me/geospatial-atlas-apps). Try for example the [6M GlobalGeoTree explorer](https://do-me.github.io/geospatial-atlas-apps/GlobalGeoTree/)!
 
@@ -50,22 +50,41 @@ The screenshots above were created with these two datasets:
 - [Foursquare 100M Places](https://huggingface.co/datasets/do-me/foursquare_places_100M), [direct download]()
 - [50k poorly geocoded news](https://huggingface.co/datasets/do-me/50k_poorly_geocoded_news), [direct download](https://huggingface.co/datasets/do-me/50k_poorly_geocoded_news/resolve/main/geocoded_news.parquet)
 
+## Build & Deploy GitHub Pages
+
+The static web app is deployed manually (no CI). To rebuild and deploy:
+
+```bash
+# 1. Install dependencies (first time only)
+npm install
+
+# 2. Build all packages (utils, component, table, viewer, docs)
+npm run build
+
+# 3. Deploy the built site to the gh-pages branch
+./scripts/deploy-gh-pages.sh
+```
+
+Then in GitHub → Settings → Pages, set the source to the `gh-pages` branch (root `/`).
+
+The live site is available at: https://do-me.github.io/geospatial-atlas/
+
 ## To Do
 
 - Disallow zooming out further than zoom level 0 to avoid weird shifting effects
 - Adapt density and point radius ranges
 - Add basemap attribution
-- Rename everything properly to "geospatial-atlas" (as I doubt that embedding-atlas project want to support geospatial data)
 - Release own "geospatial-atlas" pip package?
 - Test everything properly
 - And much more! Feel free to open PRs!
 
-Original Readme below.
 ---
+
+## Original Embedding Atlas Readme
+
 [![NPM Version](https://img.shields.io/npm/v/embedding-atlas)](https://www.npmjs.com/package/embedding-atlas)
 [![PyPI - Version](https://img.shields.io/pypi/v/embedding-atlas)](https://pypi.org/project/embedding-atlas/)
 [![Paper](https://img.shields.io/badge/paper-arXiv:2505.06386-b31b1b.svg)](https://arxiv.org/abs/2505.06386)
-![Build](https://github.com/apple/embedding-atlas/actions/workflows/ci.yml/badge.svg)
 [![GitHub License](https://img.shields.io/github/license/apple/embedding-atlas)](./LICENSE)
 
 Embedding Atlas is a tool that provides interactive visualizations for large embeddings. It allows you to visualize, cross-filter, and search embeddings and metadata.
