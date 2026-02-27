@@ -95,11 +95,15 @@
     stage = "messages";
 
     try {
-      let projectionColumns: { x: string; y: string; neighbors?: string } | undefined;
+      let projectionColumns: { x: string; y: string; neighbors?: string; isGis?: boolean } | undefined;
       let neighborsColumn: string | undefined;
 
       if (spec.embedding != null && "precomputed" in spec.embedding) {
-        projectionColumns = { x: spec.embedding.precomputed.x, y: spec.embedding.precomputed.y };
+        projectionColumns = {
+          x: spec.embedding.precomputed.x,
+          y: spec.embedding.precomputed.y,
+          isGis: spec.embedding.precomputed.isGis,
+        };
         if (spec.embedding.precomputed.neighbors != undefined) {
           neighborsColumn = spec.embedding.precomputed.neighbors;
         }

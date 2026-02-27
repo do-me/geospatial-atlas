@@ -6,6 +6,7 @@
   import ComboBox from "../../widgets/ComboBox.svelte";
   import SegmentedControl from "../../widgets/SegmentedControl.svelte";
   import Select from "../../widgets/Select.svelte";
+  import Switch from "../../widgets/Switch.svelte";
 
   import { EMBEDDING_ATLAS_VERSION } from "../../constants.js";
   import { jsTypeFromDBType } from "../../utils/database.js";
@@ -33,7 +34,7 @@
     text?: string;
     embedding?:
       | {
-          precomputed: { x: string; y: string; neighbors?: string };
+          precomputed: { x: string; y: string; neighbors?: string; isGis?: boolean };
         }
       | { compute: { column: string; type: "text" | "image"; model: string } };
   }
@@ -52,6 +53,7 @@
   let embeddingXColumn: string | undefined = $state(undefined);
   let embeddingYColumn: string | undefined = $state(undefined);
   let embeddingNeighborsColumn: string | undefined = $state(undefined);
+  let embeddingIsGis: boolean = $state(false);
   let embeddingTextColumn: string | undefined = $state(undefined);
   let embeddingTextModel: string | undefined = $state(undefined);
   let embeddingImageColumn: string | undefined = $state(undefined);
@@ -75,6 +77,7 @@
           x: embeddingXColumn,
           y: embeddingYColumn,
           neighbors: embeddingNeighborsColumn != undefined ? embeddingNeighborsColumn : undefined,
+          isGis: embeddingIsGis,
         },
       };
     }
@@ -162,6 +165,13 @@
             ...numericalColumns.map((x) => ({ value: x.column_name, label: `${x.column_name} (${x.column_type})` })),
           ]}
         />
+      </div>
+      <div class="w-full flex flex-row items-center justify-between">
+        <div class="w-[6rem] dark:text-slate-400">GIS</div>
+        <div class="flex-1 min-w-0 flex items-center justify-between">
+          <div class="text-sm text-slate-400 dark:text-slate-600 select-none">Treat X/Y as lon/lat and enable basemap</div>
+          <Switch label="Enable" value={embeddingIsGis} onChange={(v) => (embeddingIsGis = v)} />
+        </div>
       </div>
       <div class="w-full flex flex-row items-center">
         <div class="w-[6rem] dark:text-slate-400">Neighbors</div>

@@ -27,7 +27,7 @@ export interface EmbeddingAtlasProps {
     id: string;
 
     /** The X and Y columns for the embedding projection view. */
-    projection?: { x: string; y: string } | null;
+    projection?: { x: string; y: string; text?: string | null; isGis?: boolean | null } | null;
 
     /** The column for pre-computed nearest neighbors.
      *  Each value in the column should be a dictionary with the format: `{ "ids": [id1, id2, ...], "distances": [distance1, distance2, ...] }`.
