@@ -2,23 +2,25 @@ import { defineConfig } from "vitepress";
 
 import docComment from "./doc_comment.mjs";
 
+const base = process.env["EMBEDDING_ATLAS_BASE"] ?? "/geospatial-atlas/";
+
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
-  base: process.env["EMBEDDING_ATLAS_BASE"] ?? "/geospatial-atlas/",
+  base: base,
   title: "Geospatial Atlas",
   description:
     "Interactive geospatial visualizations for large-scale embeddings with basemap support. Effortlessly explore, filter, and search through rich metadata.",
   head: [
-    ["link", { rel: "icon", href: "${base}favicon.svg", media: "(prefers-color-scheme: light)" }],
-    ["link", { rel: "icon", href: "${base}favicon_dark.svg", media: "(prefers-color-scheme: dark)" }],
-    ["meta", { property: "twitter:image", content: "${base}social.png" }],
-    ["meta", { property: "og:image", content: "${base}social.png" }],
+    ["link", { rel: "icon", href: `${base}assets/icon-light.png`, media: "(prefers-color-scheme: light)" }],
+    ["link", { rel: "icon", href: `${base}assets/icon-dark.png`, media: "(prefers-color-scheme: dark)" }],
+    ["meta", { property: "twitter:image", content: `${base}assets/social.png` }],
+    ["meta", { property: "og:image", content: `${base}assets/social.png` }],
   ],
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
     logo: {
-      light: "/favicon.svg",
-      dark: "/favicon_dark.svg",
+      light: "/assets/icon-light.png",
+      dark: "/assets/icon-dark.png",
     },
     search: {
       provider: "local",
@@ -26,10 +28,11 @@ export default defineConfig({
     nav: [
       { text: "Home", link: "/" },
       { text: "Docs", link: "/overview", target: "_self" },
-      { text: "Demo", link: "/demo/index.html", target: "_self" },
+      { text: "Examples", link: "/examples", target: "_self" },
     ],
     sidebar: [
       { text: "Overview", link: "/overview" },
+      { text: "Examples", link: "/examples" },
       {
         text: "Use Embedding Atlas",
         items: [
@@ -41,7 +44,6 @@ export default defineConfig({
       {
         text: "Component Library",
         items: [
-          { text: "Table", link: "/table" },
           { text: "EmbeddingView", link: "/embedding-view" },
           { text: "EmbeddingViewMosaic", link: "/embedding-view-mosaic" },
           { text: "EmbeddingAtlas", link: "/embedding-atlas" },

@@ -1,6 +1,6 @@
 {
   "name": "embedding-atlas",
-  "version": "0.15.0",
+  "version": "0.18.0",
   "type": "module",
   "license": "MIT",
   "description": "Components for interactive embedding visualization",
@@ -77,7 +77,6 @@
   "devDependencies": {
     "@embedding-atlas/component": "*",
     "@embedding-atlas/viewer": "*",
-    "@embedding-atlas/table": "*",
     "@embedding-atlas/umap-wasm": "*",
     "tslib": "^2.8.1",
     "typescript": "^5.9.2",

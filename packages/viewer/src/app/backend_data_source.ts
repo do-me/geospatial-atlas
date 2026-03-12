@@ -8,6 +8,7 @@ import { initializeDatabase } from "../utils/database.js";
 import { downloadBuffer } from "../utils/download.js";
 import { exportMosaicSelection, filenameForSelection, type ExportFormat } from "../utils/mosaic_exporter.js";
 import type { DataSource } from "./data_source.js";
+import { MCPWebSocketServer } from "./mcp_server.js";
 
 function joinUrl(a: string, b: string) {
   if (b.startsWith(".")) {
@@ -31,6 +32,11 @@ interface Metadata {
     uri?: string;
     load?: boolean;
     files?: string[];
+    datasetUrl?: string;
+  };
+
+  mcp?: {
+    type: "websocket";
   };
 }
 
@@ -62,8 +68,9 @@ export class BackendDataSource implements DataSource {
 
     if (metadata.database?.load) {
       onStatus("Loading data...");
+      const baseUrl = metadata.database?.datasetUrl ?? this.serverUrl;
       const files = metadata.database?.files ?? ["dataset.parquet"];
-      const datasetUrls = files.map((f: string) => joinUrl(this.serverUrl, f));
+      const datasetUrls = files.map((f: string) => joinUrl(baseUrl, f));
 
       let loadQuery;
       if (datasetUrls.length === 1) {
@@ -98,6 +105,10 @@ export class BackendDataSource implements DataSource {
         let data = await resp.arrayBuffer();
         downloadBuffer(data, name);
       };
+    }
+
+    if (metadata.mcp && metadata.mcp.type == "websocket") {
+      metadata.props.modelContext = new MCPWebSocketServer(joinUrl(this.serverUrl, "mcp_websocket"));
     }
 
     return metadata.props;

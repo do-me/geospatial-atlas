@@ -20,6 +20,7 @@
   import Spinner from "./widgets/Spinner.svelte";
 
   import {
+    IconBraces,
     IconClose,
     IconDarkMode,
     IconDashboardLayout,
@@ -31,11 +32,12 @@
   } from "./assets/icons.js";
 
   import type { EmbeddingAtlasProps, EmbeddingAtlasState } from "./api.js";
-  import { ChartContextCache, type ChartContext, type RowID } from "./charts/chart.js";
+  import { ChartContextCache, type ChartContext, type ChartDelegate, type RowID } from "./charts/chart.js";
   import { type ChartThemeConfig } from "./charts/common/theme.js";
   import { defaultCharts } from "./charts/default_charts.js";
   import { EMBEDDING_ATLAS_VERSION } from "./constants.js";
-  import { type ColumnStyle } from "./renderers/index.js";
+  import { provideModelContext } from "./model_context/model_context.js";
+  import { type ColumnStyle } from "./renderers/types.js";
   import { performSearch, querySearchResultItems, resolveSearcher, type SearchResultItem } from "./search/search.js";
   import { makeColorSchemeStore } from "./utils/color_scheme.js";
   import { columnDescriptions, predicateToString, type ColumnDesc } from "./utils/database.js";
@@ -53,10 +55,10 @@
     embeddingViewLabels = null,
     chartTheme,
     colorScheme: colorSchemeProp,
-    tableCellRenderers,
     onExportApplication,
     onExportSelection,
     onStateChange,
+    modelContext,
     cache,
   }: EmbeddingAtlasProps = $props();
 
@@ -65,6 +67,8 @@
   $effect.pre(() => {
     $userColorScheme = colorSchemeProp;
   });
+
+  let container: HTMLDivElement;
 
   let initialized = $state(false);
 
@@ -92,12 +96,10 @@
   ): Record<string, ColumnStyle> {
     let result: Record<string, ColumnStyle> = {};
     for (let column of columns) {
-      let style = styles[column.name];
-      if (style == null) {
-        // Default display style
-        style = { display: data.text == column.name ? "full" : "badge" };
-      }
-      result[column.name] = style;
+      result[column.name] = {
+        display: data.text == column.name ? "full" : "badge",
+        ...(styles[column.name] ?? {}),
+      };
     }
     return result;
   }
@@ -217,13 +219,24 @@
   }
 
   function loadState(state: EmbeddingAtlasState) {
-    if (typeof state.version != "string") {
-      return;
-    }
     charts = state.charts ?? {};
     chartStates = state.chartStates ?? {};
     layout = state.layout ?? "list";
     layoutStates = state.layoutStates ?? {};
+    columnStyles = state.columnStyles ?? {};
+  }
+
+  function getCurrentState(): EmbeddingAtlasState {
+    return {
+      version: EMBEDDING_ATLAS_VERSION,
+      timestamp: new Date().getTime() / 1000,
+      charts: charts,
+      chartStates: chartStates,
+      layout: layout,
+      layoutStates: layoutStates,
+      columnStyles: columnStyles,
+      predicate: currentPredicate(),
+    };
   }
 
   // Emit onStateChange event.
@@ -231,16 +244,7 @@
     if (!initialized) {
       return;
     }
-    let state: EmbeddingAtlasState = {
-      version: EMBEDDING_ATLAS_VERSION,
-      timestamp: new Date().getTime() / 1000,
-      charts: charts,
-      chartStates: chartStates,
-      layout: layout,
-      layoutStates: layoutStates,
-      predicate: currentPredicate(),
-    };
-    onStateChange?.(state);
+    onStateChange?.(getCurrentState());
   });
 
   onMount(async () => {
@@ -302,16 +306,87 @@
     highlight: writable(null),
     embeddingViewConfig: embeddingViewConfig,
     embeddingViewLabels: embeddingViewLabels,
-    tableCellRenderers: tableCellRenderers,
   };
 
   let charts = $state.raw<Record<string, any>>({});
   let chartStates = $state.raw<Record<string, any>>({});
-  let layout = $state.raw("list");
+  let layout = $state.raw<string>("list");
   let layoutStates = $state.raw<Record<string, any>>({});
+
+  let chartDelegates = new Map<string, Set<ChartDelegate>>();
+
+  function registerChartDelegate(id: string, delegate: ChartDelegate): () => void {
+    if (!chartDelegates.has(id)) {
+      chartDelegates.set(id, new Set());
+    }
+    chartDelegates.get(id)!.add(delegate);
+    return () => {
+      chartDelegates.get(id)?.delete(delegate);
+    };
+  }
+
+  let mcpStatus = $state.raw<string | undefined>(undefined);
+
+  onMount(() => {
+    if (modelContext) {
+      provideModelContext(modelContext, {
+        context: chartContext,
+        set charts(x) {
+          charts = x;
+        },
+        get charts() {
+          return charts;
+        },
+        set chartStates(x) {
+          chartStates = x;
+        },
+        get chartStates() {
+          return chartStates;
+        },
+        set layout(x) {
+          layout = x;
+        },
+        get layout() {
+          return layout;
+        },
+        set layoutStates(x) {
+          layoutStates = x;
+        },
+        get layoutStates() {
+          return layoutStates;
+        },
+        get chartDelegates() {
+          return chartDelegates;
+        },
+        get container() {
+          return container;
+        },
+        get columnStyles() {
+          return columnStyles;
+        },
+        set columnStyles(x) {
+          columnStyles = x;
+        },
+      });
+
+      $effect(() => {
+        let subs = modelContext.connectionStatus?.subscribe((value) => {
+          mcpStatus = value;
+        });
+        return () => {
+          subs?.();
+        };
+      });
+    }
+  });
+
+  async function onCopyState() {
+    let text = JSON.stringify(getCurrentState());
+    await navigator.clipboard.writeText(text);
+  }
 </script>
 
-<div class="embedding-atlas-root" style:width="100%" style:height="100%">
+<div class="embedding-atlas-root" style:width="100%" style:height="100%" bind:this={container}>
   <div
     class="w-full h-full flex flex-col text-slate-800 bg-slate-200 dark:text-slate-200 dark:bg-slate-800"
     class:dark={$colorScheme == "dark"}
@@ -418,7 +493,6 @@
             {/if}
           </div>
         </div>
-
         <div class="flex flex-none flex-row gap-2">
           <div class="grid grid-cols-1 grid-rows-1 justify-items-end items-center">
             {#key layout}
@@ -466,9 +540,18 @@
                   }}
                 />
               {/if}
-              <!-- Export Application -->
+              <!-- Export -->
+              <h4 class="text-slate-500 dark:text-slate-400 select-none">Export</h4>
+              <div class="flex flex-col gap-2">
+                <ActionButton
+                  icon={IconBraces}
+                  label="Copy State"
+                  title="Copy the current Embedding Atlas state as JSON to clipboard."
+                  class="w-48"
+                  onClick={onCopyState}
+                />
+              </div>
               {#if onExportApplication}
-                <h4 class="text-slate-500 dark:text-slate-400 select-none">Export</h4>
                 <div class="flex flex-col gap-2">
                   <ActionButton
                     icon={IconDownload}
@@ -477,6 +560,21 @@
                     class="w-48"
                     onClick={onExportApplication}
                   />
+                </div>
+              {/if}
+              {#if mcpStatus}
+                <h4 class="text-slate-500 dark:text-slate-400 select-none">MCP (Model Context Protocol)</h4>
+                <div class="flex flex-none gap-2 select-none items-center">
+                  {#if mcpStatus == "connecting"}
+                    <div class="w-3 h-3 rounded-full bg-orange-500 animate-pulse"></div>
+                    Connecting...
+                  {:else if mcpStatus == "connected"}
+                    <div class="w-3 h-3 rounded-full bg-green-500"></div>
+                    Connected
+                  {:else if mcpStatus == "closed" || mcpStatus == "error"}
+                    <div class="w-3 h-3 rounded-full bg-red-500"></div>
+                    Error or server closed connection
+                  {/if}
                 </div>
               {/if}
               <h4 class="text-slate-500 dark:text-slate-400 select-none">About</h4>
@@ -498,6 +596,7 @@
           onChartsChange={(v) => (charts = v)}
           onChartStatesChange={(v) => (chartStates = v)}
           onLayoutStatesChange={(v) => (layoutStates = v)}
+          registerChartDelegate={registerChartDelegate}
         />
       {/if}
     </div>

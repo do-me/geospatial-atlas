@@ -37,6 +37,12 @@ Currently the parquet files require both a `lat` (or latitude) and `lon` (or lon
 
 Execute this command directly from the root directory of the repository.
 ```bash
+uv --directory packages/backend run embedding-atlas your_dataset_with_lat_lon_coords.parquet
+```
+
+If you have a small dataset (<5M places) you can add the `--text` flag to include a text column. Your names are then indexed and searchable. For large files this might cause out-of-memory errors.
+
+```bash
 uv --directory packages/backend run embedding-atlas your_dataset_with_lat_lon_coords.parquet --text your_name_column
 ```
 
@@ -112,8 +118,8 @@ Embedding Atlas is a tool that provides interactive visualizations for large emb
 Please visit <https://apple.github.io/embedding-atlas> for a demo and documentation.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./packages/docs/assets/embedding-atlas-dark.png">
-  <img alt="screenshot of Embedding Atlas" src="./packages/docs/assets/embedding-atlas-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="./packages/docs/public/assets/embedding-atlas-dark.png">
+  <img alt="screenshot of Embedding Atlas" src="./packages/docs/public/assets/embedding-atlas-light.png">
 </picture>
 
 ## Get started
@@ -142,13 +148,13 @@ npm install embedding-atlas
 ```
 
 ```js
-import { EmbeddingAtlas, EmbeddingView, Table } from "embedding-atlas";
+import { EmbeddingAtlas, EmbeddingView } from "embedding-atlas";
 
 // or with React:
-import { EmbeddingAtlas, EmbeddingView, Table } from "embedding-atlas/react";
+import { EmbeddingAtlas, EmbeddingView } from "embedding-atlas/react";
 
 // or Svelte:
-import { EmbeddingAtlas, EmbeddingView, Table } from "embedding-atlas/svelte";
+import { EmbeddingAtlas, EmbeddingView } from "embedding-atlas/svelte";
 ```
 
 For more information, please visit <https://apple.github.io/embedding-atlas/overview.html>.
@@ -190,8 +196,6 @@ This repo contains multiple sub-packages:
 Frontend:
 
 - `packages/component`: The `EmbeddingView` and `EmbeddingViewMosaic` components.
-
-- `packages/table`: The `Table` component.
 
 - `packages/viewer`: The frontend application for visualizing embedding and other columns. It also provides the `EmbeddingAtlas` component that can be embedded in other applications.
 

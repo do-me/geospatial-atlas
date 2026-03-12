@@ -2,8 +2,8 @@
 
 The Python package contains a command-line utility for you to quickly explore large text datasets with metadata.
 
-<img style="border-radius: 4px" class="light-only" src="./assets/embedding-atlas-light.png">
-<img style="border-radius: 4px" class="dark-only" src="./assets/embedding-atlas-dark.png">
+<img style="border-radius: 4px" class="light-only" src="./public/assets/embedding-atlas-light.png">
+<img style="border-radius: 4px" class="dark-only" src="./public/assets/embedding-atlas-dark.png">
 
 ## Installation
 
@@ -89,6 +89,10 @@ compute_text_projection(df, text="text_column",
     x="projection_x", y="projection_y", neighbors="neighbors"
 )
 ```
+
+## MCP Support
+
+The command line utility supports Model Context Protocol (MCP). You can enable it with the `--mcp` flag. When running, it exposes an MCP server that allows AI agents to query the data schema, run SQL queries, create and modify charts, adjust the layout, and capture screenshots.
 
 ## Usage
 

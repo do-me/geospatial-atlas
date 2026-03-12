@@ -1,7 +1,7 @@
 <!-- Copyright (c) 2025 Apple Inc. Licensed under MIT License. -->
 <script lang="ts">
   import { IconError, IconSpinner } from "../../assets/icons.js";
-  import { renderMarkdown } from "../../renderers/markdown.js";
+  import { renderMarkdown } from "../../utils/html_template.js";
   import type { LogMessage } from "../logging.js";
 
   interface Props {
@@ -16,11 +16,7 @@
 >
   {#each messages as m, i}
     {@const isLast = i == messages.length - 1}
-    <div
-      class="flex items-start leading-5 {isLast
-        ? 'text-slate-500 dark:text-slate-400'
-        : 'text-slate-300 dark:text-slate-600'}"
-    >
+    <div class="flex items-start leading-5 text-slate-500 dark:text-slate-400">
       <div class="w-7 flex-none">
         {#if isLast || m.error}
           {#if m.error}
@@ -39,16 +35,14 @@
           {m.text}
         {/if}
       </div>
-      {#if isLast}
-        <div class="flex-none font-mono text-sm">
-          {#if m.progress != null}
-            {m.progress.toFixed(0)}%
-          {/if}
-          {#if m.progressText != null}
-            {m.progressText}
-          {/if}
-        </div>
-      {/if}
+      <div class="flex-none font-mono text-sm">
+        {#if m.progress != null}
+          {m.progress.toFixed(0)}%
+        {/if}
+        {#if m.progressText != null}
+          {m.progressText}
+        {/if}
+      </div>
     </div>
   {/each}
 </div>

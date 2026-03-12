@@ -2,10 +2,13 @@
 
 """Command line interface."""
 
+import importlib
+import json
 import logging
 import pathlib
 import socket
 from pathlib import Path
+from typing import Literal
 
 import click
 import inquirer
@@ -16,8 +19,33 @@ import uvicorn
 from .data_source import DataSource
 from .options import make_embedding_atlas_props
 from .server import make_server
-from .utils import Hasher, load_huggingface_data, load_pandas_data
+from .utils import (
+    Hasher,
+    apply_logging_config,
+    load_huggingface_data,
+    load_pandas_data,
+    logger,
+)
 from .version import __version__
+
+
+class JSONParamType(click.ParamType):
+    """Accepts a JSON string or a path to a JSON file."""
+
+    name = "JSON"
+
+    def convert(self, value, param, ctx):
+        if value is None:
+            return None
+        try:
+            if value.strip().startswith("{"):
+                return json.loads(value)
+            with open(value) as f:
+                return json.load(f)
+        except json.JSONDecodeError as e:
+            self.fail(f"Invalid JSON: {e}", param, ctx)
+        except (FileNotFoundError, OSError) as e:
+            self.fail(f"Could not read file: {e}", param, ctx)
 
 
 def find_column_name(existing_names, candidate):
@@ -49,8 +77,18 @@ def determine_and_load_data(filename: str, splits: list[str] | None = None):
     return df
 
 
+def query_dataframe(query: str, data: pd.DataFrame) -> pd.DataFrame:
+    import duckdb
+
+    _ = data  # used in query
+    return duckdb.sql(query).df()
+
+
 def load_datasets(
-    inputs: list[str], splits: list[str] | None = None, sample: int | None = None
+    inputs: list[str],
+    splits: list[str] | None = None,
+    query: str | None = None,
+    sample: int | None = None,
 ) -> pd.DataFrame:
     existing_column_names = set()
     dataframes = []
@@ -66,6 +104,9 @@ def load_datasets(
         df[file_name_column] = fn
 
     df = pd.concat(dataframes)
+
+    if query is not None:
+        df = query_dataframe(query, df)
 
     if sample:
         df = df.sample(n=sample, axis=0, random_state=np.random.RandomState(42))
@@ -111,6 +152,12 @@ def find_gis_columns(columns):
         if x_cand in cols_map and y_cand in cols_map:
             return cols_map[x_cand], cols_map[y_cand]
     return None, None
+
+
+def import_modules(names: list[str]):
+    """Import the given list of modules."""
+    for name in names:
+        importlib.import_module(name)
 
 
 @click.command()
@@ -195,10 +242,16 @@ def find_gis_columns(columns):
     help='Column containing pre-computed nearest neighbors in format: {"ids": [n1, n2, ...], "distances": [d1, d2, ...]}. IDs should be zero-based row indices.',
 )
 @click.option(
+    "--query",
+    default=None,
+    type=str,
+    help="Use the result of the given SQL query as input data. In the query, you may refer to the original data as 'data'.",
+)
+@click.option(
     "--sample",
     default=None,
     type=int,
-    help="Number of random samples to draw from the dataset. Useful for large datasets.",
+    help="Number of random samples to draw from the dataset. Useful for large datasets. If query is specified, sampling applies after the query.",
 )
 @click.option(
     "--umap-n-neighbors",
@@ -239,12 +292,35 @@ def find_gis_columns(columns):
     help="Automatically find an available port if the specified port is in use.",
 )
 @click.option(
+    "--cors",
+    default=None,
+    is_flag=False,
+    flag_value="",
+    help="Allow cross-origin requests. Use --cors to allow all origins, or --cors http://example.com for a specific domain (or a comma-separated list of domains).",
+)
+@click.option(
     "--static", type=str, help="Custom path to frontend static files directory."
 )
 @click.option(
     "--export-application",
     type=str,
-    help="Export the visualization as a standalone web application to the specified ZIP file and exit.",
+    help="Export the visualization as a standalone web application to the specified path. "
+    "Use a .zip extension for a ZIP archive, or any other path to export to a folder.",
+)
+@click.option(
+    "--export-metadata",
+    type=JSONParamType(),
+    default=None,
+    help="Custom metadata to merge into the exported metadata.json. "
+    'Pass a JSON string (e.g., \'{"database": {"datasetUrl": "https://..."}}\') '
+    "or a path to a JSON file.",
+)
+@click.option(
+    "--with",
+    "with_modules",
+    default=[],
+    multiple=True,
+    help="Import the given Python module before loading data. For example, you can use this to import fsspec filesystems. Can be specified multiple times to import multiple modules.",
 )
 @click.option(
     "--point-size",
@@ -256,13 +332,19 @@ def find_gis_columns(columns):
     "--stop-words",
     type=str,
     default=None,
-    help="Path to a file containing stop words to exclude from the text embedding. The file should be a data frame with column 'word'",
+    help="Path to a file containing stop words to exclude from the text embedding. The file should be a table with column 'word'",
 )
 @click.option(
     "--labels",
     type=str,
     default=None,
-    help="Path to a file containing labels for the embedding view. The file should be a data frame with columns 'x', 'y', 'text', and optionally 'level' and 'priority'",
+    help="Path to a file containing labels for the embedding view. The file should be a table with columns 'x', 'y', 'text', and optionally 'level' and 'priority'",
+)
+@click.option(
+    "--mcp/--no-mcp",
+    "enable_mcp",
+    default=False,
+    help="Enable MCP (Model Context Protocol) server endpoints for external tool integration.",
 )
 @click.version_option(version=__version__, package_name="embedding_atlas")
 def main(
@@ -275,7 +357,7 @@ def main(
     model: str | None,
     trust_remote_code: bool,
     batch_size: int | None,
-    text_projector: str,
+    text_projector: Literal["sentence_transformers", "litellm"],
     api_key: str | None,
     api_base: str | None,
     dimensions: int | None,
@@ -283,6 +365,7 @@ def main(
     x_column: str | None,
     y_column: str | None,
     neighbors_column: str | None,
+    query: str | None,
     sample: int | None,
     umap_n_neighbors: int | None,
     umap_min_dist: int | None,
@@ -293,17 +376,21 @@ def main(
     host: str,
     port: int,
     enable_auto_port: bool,
+    cors: str | None,
     export_application: str | None,
+    export_metadata: dict | None,
+    with_modules: list[str] | None,
     point_size: float | None,
     stop_words: str | None,
     labels: str | None,
+    enable_mcp: bool,
 ):
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(levelname)s: (%(name)s) %(message)s",
-    )
+    apply_logging_config()
 
-    df = load_datasets(inputs, splits=split, sample=sample)
+    if with_modules is not None:
+        import_modules(with_modules)
+
+    df = load_datasets(inputs, splits=split, query=query, sample=sample)
 
     is_gis = False
     if x_column is None or y_column is None:
@@ -350,7 +437,7 @@ def main(
             if vector is not None:
                 compute_vector_projection(
                     df,
-                    vector,
+                    vector=vector,
                     x=x_column,
                     y=y_column,
                     neighbors=new_neighbors_column,
@@ -370,7 +457,7 @@ def main(
 
                 compute_text_projection(
                     df,
-                    text,
+                    text=text,
                     x=x_column,
                     y=y_column,
                     neighbors=new_neighbors_column,
@@ -384,7 +471,7 @@ def main(
             elif image is not None:
                 compute_image_projection(
                     df,
-                    image,
+                    image=image,
                     x=x_column,
                     y=y_column,
                     neighbors=new_neighbors_column,
@@ -437,19 +524,63 @@ def main(
         static = str((pathlib.Path(__file__).parent / "static").resolve())
 
     if export_application is not None:
-        with open(export_application, "wb") as f:
-            f.write(dataset.make_archive(static))
+        if export_application.endswith(".zip"):
+            with open(export_application, "wb") as f:
+                f.write(dataset.make_archive(static, export_metadata))
+        else:
+            dataset.export_to_folder(static, export_application, export_metadata)
         exit(0)
 
-    app = make_server(dataset, static_path=static, duckdb_uri=duckdb)
+    # Parse CORS configuration
+    cors_config = False
+    if cors is not None:
+        if cors == "":
+            # --cors flag without value means allow all origins
+            cors_config = True
+        else:
+            # --cors=domain1.com,domain2.com means specific domains
+            cors_config = [
+                domain.strip() for domain in cors.split(",") if domain.strip()
+            ]
+
+    app = make_server(
+        dataset, static_path=static, duckdb_uri=duckdb, mcp=enable_mcp, cors=cors_config
+    )
 
     if enable_auto_port:
         new_port = find_available_port(port, max_attempts=10, host=host)
         if new_port != port:
-            logging.info(f"Port {port} is not available, using {new_port}")
+            logger.info(f"Port {port} is not available, using {new_port}")
     else:
         new_port = port
-    uvicorn.run(app, port=new_port, host=host, access_log=False)
+
+    print()
+    print(click.style("-" * 79, dim=True))
+    print()
+    print(
+        f"  {click.style('🚀 Embedding Atlas', fg='green', bold=True)}  {click.style('v' + __version__, fg='green')}"
+    )
+    print()
+    print(f"  ➜ URL: {click.style(f'http://{host}:{new_port}', fg='cyan', bold=True)}")
+    print(
+        click.style(
+            "  ➜ Network: use --host to expose, use --cors to enable cross-origin requests",
+            dim=True,
+        )
+    )
+    if enable_mcp:
+        print(
+            f"  ➜ MCP server: {click.style(f'http://{host}:{new_port}/mcp', fg='blue')}"
+        )
+    else:
+        print(click.style("  ➜ MCP server: use --mcp to enable", dim=True))
+    print(click.style("  ➜ Press CTRL+C to quit", dim=True))
+    print()
+    print(click.style("-" * 79, dim=True))
+
+    uvicorn.run(
+        app, port=new_port, host=host, access_log=False, log_level=logging.ERROR
+    )
 
 
 if __name__ == "__main__":

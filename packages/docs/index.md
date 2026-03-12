@@ -12,8 +12,8 @@ hero:
     alt: a screenshot of geospatial atlas
   actions:
     - theme: brand
-      text: Demo
-      link: /demo/
+      text: Examples
+      link: /examples/
       target: _self
     - theme: brand
       text: Load Data

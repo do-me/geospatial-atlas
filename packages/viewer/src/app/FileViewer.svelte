@@ -64,7 +64,8 @@
       await databaseInitialized;
 
       let db = await (coordinator.databaseConnector()! as DuckDBWASMConnector).getDuckDB();
-      await importDataTable(inputs, db, coordinator, "dataset", logger);
+      let conn = await (coordinator.databaseConnector()! as DuckDBWASMConnector).getConnection();
+      await importDataTable(inputs, db, conn, "dataset", logger);
 
       let describeResult = await coordinator.query(`DESCRIBE TABLE dataset`);
       describe = Array.from(describeResult) as typeof describe;
@@ -115,6 +116,7 @@
         let model = spec.embedding.compute.model;
         let x = input + "_proj_x";
         let y = input + "_proj_y";
+        let msg = logger.info(`Embedding: Initialize`);
         await computeEmbedding({
           coordinator: coordinator,
           table: "dataset",
@@ -125,7 +127,7 @@
           yColumn: y,
           model: model,
           callback: (message, progress) => {
-            logger.info(`Embedding: ${message}`, { progress: progress });
+            msg.update({ text: `Embedding: ${message}`, progress: progress });
           },
         });
         projectionColumns = { x, y };

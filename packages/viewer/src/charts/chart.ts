@@ -1,11 +1,11 @@
 // Copyright (c) 2025 Apple Inc. Licensed under MIT License.
 
 import type { EmbeddingViewConfig, Label } from "@embedding-atlas/component";
-import type { CustomCell } from "@embedding-atlas/table";
 import type { Coordinator, Selection } from "@uwdata/mosaic-core";
 import type { Readable, Writable } from "svelte/store";
 
 import type { ColumnDesc } from "../utils/database.js";
+import type { ScreenshotOptions } from "../utils/screenshot.js";
 import type { ChartThemeConfig } from "./common/theme.js";
 
 export class ChartContextCache {
@@ -86,17 +86,17 @@ export interface ChartContext {
   /** Current search result */
   searchResult: Readable<{ query: any; mode: string; ids: RowID[] } | null>;
 
-  /** The current highlight point. When this changes, supported views will highlight the given point. */
-  highlight: Writable<RowID | null>;
+  /**
+   * The current highlight point(s). When this changes, supported views will highlight the given point(s).
+   * When a new point is added to this list, views will animate to reveal the new point.
+   */
+  highlight: Writable<RowID[] | null>;
 
   /** Configuration for the embedding view. See docs for the EmbeddingView. */
   embeddingViewConfig?: EmbeddingViewConfig | null;
 
   /** Labels for the embedding view. */
   embeddingViewLabels?: Label[] | null;
-
-  /** Custom cell renderers for the table view. */
-  tableCellRenderers?: Record<string, CustomCell | "markdown">;
 }
 
 /** Props passed into a chart view. */
@@ -150,6 +150,14 @@ export interface ChartViewProps<Spec = unknown, State = unknown> {
    * In "replace" mode, the new spec completely replaces the existing spec.
    */
   onSpecChange: (spec: Partial<Spec>, mode?: "merge" | "replace") => void;
+
+  /** Register a chart delegate. */
+  registerDelegate?: (delegate: ChartDelegate) => () => void;
+}
+
+export interface ChartDelegate {
+  /** Returns a screenshot of the chart, result should be a data URL of the screenshot. */
+  screenshot?: (options?: ScreenshotOptions) => Promise<string>;
 }
 
 export type { ChartBuilderDescription } from "./builder/builder_description.js";

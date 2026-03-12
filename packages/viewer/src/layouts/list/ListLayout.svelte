@@ -1,35 +1,30 @@
 <!-- Copyright (c) 2025 Apple Inc. Licensed under MIT License. -->
 <script module lang="ts">
-  export interface ListLayoutState {
-    showTable?: boolean;
-    showEmbedding?: boolean;
-    showCharts?: boolean;
-
-    chartsOrder?: string[];
-    chartVisibility?: Record<string, boolean>;
-  }
-
   export type Section = "embedding" | "table" | "chart";
 
-  export function findSection(spec: any): Section | undefined {
+  export function findSection(spec: any, id: string, placements?: Record<string, Section>): Section | undefined {
+    if (placements?.[id] != undefined) {
+      return placements[id];
+    }
+
     switch (spec.type) {
       case "embedding":
         return "embedding";
-      case "table":
+      case "instances":
         return "table";
       default:
         return "chart";
     }
   }
 
-  export function getSections(charts: Record<string, any>): Record<Section, string[]> {
+  export function getSections(charts: Record<string, any>, layoutState: ListLayoutState): Record<Section, string[]> {
     let r: Record<Section, string[]> = {
       embedding: [],
       table: [],
       chart: [],
     };
     for (let id in charts) {
-      let section = findSection(charts[id]);
+      let section = findSection(charts[id], id, layoutState.placements);
       if (section != undefined) {
         r[section].push(id);
       }
@@ -49,6 +44,7 @@
   import { findUnusedId } from "../../utils/identifier.js";
   import { reorder } from "../../utils/sort.js";
   import type { LayoutProps } from "../layout.js";
+  import type { ListLayoutState } from "./types.js";
 
   let {
     context,
@@ -67,8 +63,9 @@
 
   let tableHeight = $state(300);
   let panelWidth = $state(400);
+  let panelContainerWidth = $state(400);
 
-  let sections = $derived.by(deepMemo(() => getSections(charts)));
+  let sections = $derived.by(deepMemo(() => getSections(charts, layoutState)));
 
   let isMobileLayout = $derived(containerWidth < 500);
 
@@ -142,12 +139,12 @@
         {/if}
         {#if hasTable}
           <div
-            class={hasEmbedding ? "flex-none" : "flex-1"}
+            class="flex flex-row gap-2 overflow-hidden {hasEmbedding ? 'flex-none' : 'flex-1'}"
             style:height={hasEmbedding ? `${tableHeight}px` : null}
             transition:slide
           >
             {#each sections.table as id (id)}
-              <div class="flex-1 h-full overflow-hidden rounded-md">
+              <div class="flex-1 overflow-hidden rounded-md">
                 {@render chartView({ id: id, width: "container", height: "container" })}
               </div>
             {/each}
@@ -168,13 +165,12 @@
     {/if}
     <!-- Right side: charts -->
     {#if hasChart}
-      {@const chartsWidth = hasEmbedding || hasTable ? panelWidth : containerWidth}
       <div
         class="h-full overflow-x-hidden overflow-y-scroll"
-        style:width="{chartsWidth}px"
+        style:width="{hasEmbedding || hasTable ? panelWidth : containerWidth}px"
         transition:slide={{ axis: "x" }}
       >
-        <div class="flex flex-row flex-wrap gap-2" style:width="{chartsWidth}px">
+        <div class="flex flex-row flex-wrap gap-2" bind:clientWidth={panelContainerWidth}>
           <button
             class="bg-white dark:bg-black rounded-md flex flex-col justify-center items-center gap-2 p-2 w-full text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 select-none"
             onclick={() => {
@@ -190,7 +186,7 @@
             {@const isVisible = layoutState.chartVisibility?.[id] ?? true}
             <div
               class="bg-white dark:bg-black rounded-md flex flex-col group"
-              style:width="{chartWidth(chartsWidth, 500)}px"
+              style:width="{chartWidth(panelContainerWidth, 500)}px"
               animate:flip={{ duration: 300 }}
               out:slide
             >
