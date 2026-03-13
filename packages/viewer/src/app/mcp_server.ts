@@ -170,10 +170,10 @@ export class MCPWebSocketServer implements ModelContextAPI {
         tasks: {},
       },
       serverInfo: {
-        name: "Embedding Atlas",
-        title: "Embedding Atlas MCP Server",
+        name: "Geospatial Atlas",
+        title: "Geospatial Atlas MCP Server",
         version: "1.0.0",
-        description: "MCP server for the Embedding Atlas frontend",
+        description: "MCP server for the Geospatial Atlas frontend",
         icons: [
           {
             src: "https://apple.github.io/embedding-atlas/favicon.svg",

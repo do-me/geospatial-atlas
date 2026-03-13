@@ -27,7 +27,7 @@ def make_server(
     cors: bool | list[str] = False,
     duckdb_uri: str | None = None,
 ):
-    """Creates a server for hosting Embedding Atlas"""
+    """Creates a server for hosting Geospatial Atlas"""
 
     app = FastAPI()
 

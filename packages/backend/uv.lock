@@ -832,69 +832,6 @@ wheels = [
 ]
 
 [[package]]
-name = "embedding-atlas"
-version = "0.18.0"
-source = { editable = "." }
-dependencies = [
-    { name = "accelerate" },
-    { name = "click" },
-    { name = "duckdb" },
-    { name = "fastapi" },
-    { name = "fastparquet" },
-    { name = "inquirer" },
-    { name = "litellm" },
-    { name = "llvmlite" },
-    { name = "pandas" },
-    { name = "platformdirs" },
-    { name = "pyarrow" },
-    { name = "sentence-transformers" },
-    { name = "tqdm" },
-    { name = "umap-learn" },
-    { name = "uvicorn" },
-    { name = "uvloop", marker = "platform_system != 'Windows'" },
-    { name = "websockets" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "anywidget" },
-    { name = "datasets" },
-    { name = "docutils" },
-    { name = "jupyterlab" },
-    { name = "streamlit" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "accelerate", specifier = ">=1.5.0" },
-    { name = "click", specifier = ">=7.0.0" },
-    { name = "duckdb", specifier = ">=1.4.0" },
-    { name = "fastapi", specifier = ">=0.115.0" },
-    { name = "fastparquet", specifier = ">=2024.0.0" },
-    { name = "inquirer", specifier = ">=3.0.0" },
-    { name = "litellm", specifier = ">=1.70.0" },
-    { name = "llvmlite", specifier = ">=0.43.0" },
-    { name = "pandas", specifier = ">=2.2.0" },
-    { name = "platformdirs", specifier = ">=4.3.0" },
-    { name = "pyarrow", specifier = ">=18.0.0" },
-    { name = "sentence-transformers", specifier = ">=3.3.0" },
-    { name = "tqdm", specifier = ">=4.60.0" },
-    { name = "umap-learn", specifier = ">=0.5.0" },
-    { name = "uvicorn", specifier = ">=0.32.0" },
-    { name = "uvloop", marker = "platform_system != 'Windows'", specifier = ">=0.21.0" },
-    { name = "websockets", specifier = ">=15.0.1" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "anywidget", specifier = ">=0.9.0" },
-    { name = "datasets", specifier = ">=3.1.0" },
-    { name = "docutils", specifier = ">=0.22.4" },
-    { name = "jupyterlab", specifier = ">=4.3.0" },
-    { name = "streamlit", specifier = ">=1.43.0" },
-]
-
-[[package]]
 name = "executing"
 version = "2.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1169,6 +1106,69 @@ wheels = [
 [package.optional-dependencies]
 http = [
     { name = "aiohttp" },
+]
+
+[[package]]
+name = "geospatial-atlas"
+version = "0.18.0"
+source = { editable = "." }
+dependencies = [
+    { name = "accelerate" },
+    { name = "click" },
+    { name = "duckdb" },
+    { name = "fastapi" },
+    { name = "fastparquet" },
+    { name = "inquirer" },
+    { name = "litellm" },
+    { name = "llvmlite" },
+    { name = "pandas" },
+    { name = "platformdirs" },
+    { name = "pyarrow" },
+    { name = "sentence-transformers" },
+    { name = "tqdm" },
+    { name = "umap-learn" },
+    { name = "uvicorn" },
+    { name = "uvloop", marker = "platform_system != 'Windows'" },
+    { name = "websockets" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "anywidget" },
+    { name = "datasets" },
+    { name = "docutils" },
+    { name = "jupyterlab" },
+    { name = "streamlit" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "accelerate", specifier = ">=1.5.0" },
+    { name = "click", specifier = ">=7.0.0" },
+    { name = "duckdb", specifier = ">=1.4.0" },
+    { name = "fastapi", specifier = ">=0.115.0" },
+    { name = "fastparquet", specifier = ">=2024.0.0" },
+    { name = "inquirer", specifier = ">=3.0.0" },
+    { name = "litellm", specifier = ">=1.70.0" },
+    { name = "llvmlite", specifier = ">=0.43.0" },
+    { name = "pandas", specifier = ">=2.2.0" },
+    { name = "platformdirs", specifier = ">=4.3.0" },
+    { name = "pyarrow", specifier = ">=18.0.0" },
+    { name = "sentence-transformers", specifier = ">=3.3.0" },
+    { name = "tqdm", specifier = ">=4.60.0" },
+    { name = "umap-learn", specifier = ">=0.5.0" },
+    { name = "uvicorn", specifier = ">=0.32.0" },
+    { name = "uvloop", marker = "platform_system != 'Windows'", specifier = ">=0.21.0" },
+    { name = "websockets", specifier = ">=15.0.1" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "anywidget", specifier = ">=0.9.0" },
+    { name = "datasets", specifier = ">=3.1.0" },
+    { name = "docutils", specifier = ">=0.22.4" },
+    { name = "jupyterlab", specifier = ">=4.3.0" },
+    { name = "streamlit", specifier = ">=1.43.0" },
 ]
 
 [[package]]

@@ -19,7 +19,7 @@ def embedding_atlas(
     **options: Unpack[EmbeddingAtlasOptions],
 ) -> dict:
     """
-    Create an Embedding Atlas widget in Streamlit.
+    Create a Geospatial Atlas widget in Streamlit.
 
     Args:
         data_frame:

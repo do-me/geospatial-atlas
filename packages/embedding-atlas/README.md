@@ -1,7 +1,7 @@
-# Embedding Atlas Library
+# Geospatial Atlas Library
 
-- Documentation: https://apple.github.io/embedding-atlas
-- GitHub: https://github.com/apple/embedding-atlas
+- Documentation: https://do-me.github.io/geospatial-atlas
+- GitHub: https://github.com/do-me/geospatial-atlas
 
 ```js
 // Embedding View component (just the embedding view)

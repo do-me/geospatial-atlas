@@ -1,8 +1,8 @@
 [project]
-name = "embedding-atlas"
+name = "geospatial-atlas"
 version = "0.18.0"
 license = "MIT"
-description = "A tool for visualizing embeddings"
+description = "A tool for visualizing geospatial and embedding data"
 keywords = ["embedding", "visualization"]
 readme = "README.md"
 authors = [
@@ -33,11 +33,11 @@ dependencies = [
 ]
 
 [project.scripts]
-embedding-atlas = "embedding_atlas.cli:main"
+geospatial-atlas = "embedding_atlas.cli:main"
 
 [project.urls]
-homepage = "https://apple.github.io/embedding-atlas"
-source = "https://github.com/apple/embedding-atlas"
+homepage = "https://do-me.github.io/geospatial-atlas"
+source = "https://github.com/do-me/geospatial-atlas"
 
 [build-system]
 requires = ["hatchling"]

@@ -412,7 +412,7 @@ function makeRenderCommand(
           density_width: densityWidth,
           density_height: densityHeight,
           gamma: props.gamma,
-          point_size: Math.max(props.mode == "points" ? 3 : 1, props.pointSize),
+          point_size: Math.max(props.mode == "points" ? 0.3 : 0.1, props.pointSize),
           point_alpha: props.pointAlpha,
           points_alpha: props.pointsAlpha,
           density_scaler: props.densityScaler / (densityPixelRatio * densityPixelRatio),

@@ -13,10 +13,10 @@ def load_data():
 
 
 def main():
-    # Embedding Atlas looks better in wide mode
+    # Geospatial Atlas looks better in wide mode
     st.set_page_config(layout="wide")
 
-    st.title("Embedding Atlas + Streamlit")
+    st.title("Geospatial Atlas + Streamlit")
 
     # Load some data
     st.write("Load an example dataset")
@@ -31,7 +31,7 @@ def main():
         neighbors="neighbors",
     )
 
-    # Create the Embedding Atlas widget in Streamlit
+    # Create the Geospatial Atlas widget in Streamlit
     value = embedding_atlas(
         df,
         text="description",

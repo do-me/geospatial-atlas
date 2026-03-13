@@ -100,6 +100,10 @@
 
   import maplibregl from "maplibre-gl";
   import "maplibre-gl/dist/maplibre-gl.css";
+  import { Protocol } from "pmtiles";
+
+  const pmtilesProtocol = new Protocol();
+  maplibregl.addProtocol("pmtiles", pmtilesProtocol.tile);
 
   import { defaultCategoryColors } from "../colors.js";
   import type { EmbeddingRenderer } from "../renderer_interface.js";

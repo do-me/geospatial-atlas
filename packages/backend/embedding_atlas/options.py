@@ -52,7 +52,7 @@ class EmbeddingAtlasOptions(TypedDict, total=False):
         Whether to display the embedding view when the widget opens.
 
     initial_state:
-        The initial Embedding Atlas state.
+        The initial Geospatial Atlas state.
     """
 
     table: str | None
@@ -88,7 +88,7 @@ def make_embedding_atlas_props(**options: Unpack[EmbeddingAtlasOptions]) -> dict
 
     if len(invalid_options) > 0:
         raise ValueError(
-            f"The following options are not allowed for the Embedding Atlas widget: {','.join(invalid_options)}. Allowed options are {', '.join(allowed_options)}"
+            f"The following options are not allowed for the Geospatial Atlas widget: {','.join(invalid_options)}. Allowed options are {', '.join(allowed_options)}"
         )
 
     props: dict = {}

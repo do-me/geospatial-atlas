@@ -86,7 +86,7 @@ export class BackendDataSource implements DataSource {
       this.downloadArchive = async () => {
         let resp = await this.fetchEndpoint("archive.zip");
         let data = await resp.arrayBuffer();
-        downloadBuffer(data, "embedding-atlas.zip");
+        downloadBuffer(data, "geospatial-atlas.zip");
       };
     }
 

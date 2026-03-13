@@ -558,7 +558,7 @@ def main(
     print(click.style("-" * 79, dim=True))
     print()
     print(
-        f"  {click.style('🚀 Embedding Atlas', fg='green', bold=True)}  {click.style('v' + __version__, fg='green')}"
+        f"  {click.style('🚀 Geospatial Atlas', fg='green', bold=True)}  {click.style('v' + __version__, fg='green')}"
     )
     print()
     print(f"  ➜ URL: {click.style(f'http://{host}:{new_port}', fg='cyan', bold=True)}")

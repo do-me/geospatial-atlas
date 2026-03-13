@@ -21,7 +21,7 @@ except ImportError:
 
 
 class EmbeddingAtlasWidget(anywidget.AnyWidget):
-    """An Embedding Atlas widget in notebooks"""
+    """A Geospatial Atlas widget in notebooks"""
 
     _esm = pathlib.Path(__file__).parent / "widget_static" / "anywidget" / "index.js"
 
@@ -40,7 +40,7 @@ class EmbeddingAtlasWidget(anywidget.AnyWidget):
         **options: Unpack[EmbeddingAtlasOptions],
     ):
         """
-        Create an Embedding Atlas widget.
+        Create a Geospatial Atlas widget.
 
         Args:
             data_frame:

@@ -37,19 +37,19 @@ Currently the parquet files require both a `lat` (or latitude) and `lon` (or lon
 
 Execute this command directly from the root directory of the repository.
 ```bash
-uv --directory packages/backend run embedding-atlas your_dataset_with_lat_lon_coords.parquet
+uv --directory packages/backend run geospatial-atlas your_dataset_with_lat_lon_coords.parquet
 ```
 
 If you have a small dataset (<5M places) you can add the `--text` flag to include a text column. Your names are then indexed and searchable. For large files this might cause out-of-memory errors.
 
 ```bash
-uv --directory packages/backend run embedding-atlas your_dataset_with_lat_lon_coords.parquet --text your_name_column
+uv --directory packages/backend run geospatial-atlas your_dataset_with_lat_lon_coords.parquet --text your_name_column
 ```
 
 Alternatively you can cd into the backend folder and run it from there:
 ```
 cd packages/backend
-uv run embedding-atlas your_dataset_with_lat_lon_coords.parquet --text your_name_column
+uv run geospatial-atlas your_dataset_with_lat_lon_coords.parquet --text your_name_column
 ```
 
 The screenshots above were created with these two datasets:

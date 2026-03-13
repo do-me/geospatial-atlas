@@ -35,7 +35,7 @@ const defaultThemeConfig: { light: EmbeddingViewTheme; dark: EmbeddingViewTheme 
     statusBar: true,
     statusBarTextColor: "#525252",
     statusBarBackgroundColor: "rgba(255,255,255,0.9)",
-    brandingLink: { text: "Embedding Atlas", href: "https://apple.github.io/embedding-atlas" },
+    brandingLink: { text: "Geospatial Atlas", href: "https://do-me.github.io/geospatial-atlas" },
   },
   dark: {
     fontFamily: "system-ui,sans-serif",
@@ -45,7 +45,7 @@ const defaultThemeConfig: { light: EmbeddingViewTheme; dark: EmbeddingViewTheme 
     statusBar: true,
     statusBarTextColor: "#d9d9d9",
     statusBarBackgroundColor: "rgba(0,0,0,0.9)",
-    brandingLink: { text: "Embedding Atlas", href: "https://apple.github.io/embedding-atlas" },
+    brandingLink: { text: "Geospatial Atlas", href: "https://do-me.github.io/geospatial-atlas" },
   },
 };
 
