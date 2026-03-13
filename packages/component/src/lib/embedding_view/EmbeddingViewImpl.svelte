@@ -183,7 +183,36 @@
     return data.y;
   });
 
-  let resolvedViewportState = $derived(viewportState ?? defaultViewportState ?? { x: 0, y: 0, scale: 1 });
+  // In GIS mode, the minimum scale corresponds to MapLibre zoom level 1.
+  // Below this, MapLibre's jumpTo can't keep up and the map/point layers diverge.
+  let gisMinScale = $derived(1024 * 2 / (360 * width));
+
+  let resolvedViewportState = $derived.by(() => {
+    let state = viewportState ?? defaultViewportState ?? { x: 0, y: 0, scale: 1 };
+    if (isGis) {
+      let clamped = false;
+      let scale = state.scale;
+      let y = state.y;
+      if (scale < gisMinScale) {
+        scale = gisMinScale;
+        clamped = true;
+      }
+      // Clamp Y so the view stays within Mercator bounds (±85.05° lat → ±180 projected)
+      const mercatorMax = 180;
+      const sy = width >= height ? scale * width / height : scale;
+      const visibleHalfY = 1 / sy;
+      const yMin = -mercatorMax + visibleHalfY;
+      const yMax = mercatorMax - visibleHalfY;
+      if (yMin < yMax) {
+        if (y < yMin) { y = yMin; clamped = true; }
+        if (y > yMax) { y = yMax; clamped = true; }
+      }
+      if (clamped) {
+        return { ...state, scale, y };
+      }
+    }
+    return state;
+  });
   let resolvedViewport = $derived(new Viewport(resolvedViewportState, width, height, isGis));
   let pointLocation = $derived(resolvedViewport.pixelLocationFunction());
   let coordinateAtPoint = $derived(resolvedViewport.coordinateAtPixelFunction());
@@ -440,6 +469,7 @@
             isGis ? Viewport.unprojectLat(resolvedViewportState.y) : resolvedViewportState.y,
           ],
           zoom: Math.log2((360 * resolvedViewportState.scale * width) / 1024),
+          minZoom: 1,
           interactive: false,
           attributionControl: false,
         });
@@ -496,7 +526,7 @@
     let minScale: number;
     if (isGis) {
       maxScale = Infinity;
-      minScale = 1024 / (360 * width);
+      minScale = gisMinScale;
     } else {
       maxScale = (defaultViewportState?.scale ?? 1) * 1e2;
       minScale = (defaultViewportState?.scale ?? 1) * 1e-2;
