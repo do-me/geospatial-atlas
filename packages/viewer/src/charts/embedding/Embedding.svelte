@@ -231,7 +231,7 @@
       isGis: spec.data.isGis,
       mapStyle: spec.mapStyle,
       ...(spec.minimumDensity != null ? { minimumDensity: spec.minimumDensity } : {}),
-      ...(spec.pointSize != null ? { pointSize: spec.pointSize } : {}),
+      pointSize: spec.pointSize ?? 2,
       downsampleMaxPoints: spec.downsampleMaxPoints ?? defaultDownsampleMaxPoints,
     }}
     labels={context.embeddingViewLabels}
@@ -353,12 +353,12 @@
           <div class="text-slate-500 dark:text-slate-400 select-none">Point Size</div>
           <div class="flex gap-2 items-center">
             <Slider
-              bind:value={() => spec.pointSize ?? 1, (v) => onSpecChange({ pointSize: v })}
-              min={1}
+              bind:value={() => spec.pointSize ?? 2, (v) => onSpecChange({ pointSize: v })}
+              min={0.05}
               max={10}
               step={0.05}
             />
-            <Button label="Auto" onClick={() => onSpecChange({ pointSize: undefined })} />
+            <Button label="Auto" onClick={() => onSpecChange({ pointSize: 2 })} />
           </div>
           {#if totalPointCount != null && totalPointCount > minDownsampleMaxPoints}
             {@const effectiveLimit = spec.downsampleMaxPoints ?? Math.min(defaultDownsampleMaxPoints, totalPointCount)}
