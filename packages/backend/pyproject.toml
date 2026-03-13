@@ -1,6 +1,6 @@
 [project]
 name = "geospatial-atlas"
-version = "0.18.0"
+version = "0.18.1"
 license = "MIT"
 description = "A tool for visualizing geospatial and embedding data"
 keywords = ["embedding", "visualization"]
