@@ -19,6 +19,7 @@
 
   let { context, width, height, onSpecChange, onStateChange }: ChartViewProps<{}, {}> = $props();
 
+  // svelte-ignore state_referenced_locally
   let { columns, colorScheme } = context;
 
   let chartBuilders = chartBuilderDescriptions();
@@ -105,6 +106,11 @@
     }
     switch (c.jsType) {
       case "number":
+        return {
+          name: c.name,
+          type: "continuous",
+        };
+      case "Date":
         return {
           name: c.name,
           type: "continuous",

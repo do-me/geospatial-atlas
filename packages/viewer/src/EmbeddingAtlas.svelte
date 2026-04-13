@@ -107,6 +107,7 @@
   // Search
 
   // Use a default searcher FullTextSearcher when searcher is not specified
+  // svelte-ignore state_referenced_locally
   let searcher = resolveSearcher({
     coordinator,
     table: data.table,
@@ -263,6 +264,7 @@
           ? {
               ...data.projection,
               text: data.text ?? undefined,
+              isGis: data.projection.isGis ?? undefined,
             }
           : undefined,
         config: defaultChartsConfig ?? undefined,
@@ -284,11 +286,14 @@
     }
   }
 
+  // svelte-ignore state_referenced_locally
   let chartThemeStore = writable<ChartThemeConfig | undefined>(chartTheme ?? undefined);
+
   $effect.pre(() => {
     chartThemeStore.set(chartTheme ?? undefined);
   });
 
+  // svelte-ignore state_referenced_locally
   let chartContext: ChartContext = {
     coordinator: coordinator,
     filter: crossFilter,

@@ -1,6 +1,6 @@
 [project]
 name = "geospatial-atlas"
-version = "0.18.1"
+version = "0.20.0"
 license = "MIT"
 description = "A tool for visualizing geospatial and embedding data"
 keywords = ["embedding", "visualization"]
@@ -28,8 +28,10 @@ dependencies = [
   "llvmlite >= 0.43.0",
   "accelerate >= 1.5.0",
   "tqdm >= 4.60.0",
-  "litellm >= 1.70.0",
+  "litellm >= 1.70.0, != 1.82.7, != 1.82.8", # Critical supply chain attack: https://futuresearch.ai/blog/litellm-pypi-supply-chain-attack/
   "websockets >= 15.0.1",
+  "cryptography >= 35.0.0",
+  "narwhals >= 2.0.0",
 ]
 
 [project.scripts]
@@ -52,11 +54,21 @@ artifacts = [
 [tool.hatch.build.targets.wheel]
 packages = ["embedding_atlas"]
 
-[tool.uv]
-dev-dependencies = [
-  "docutils >= 0.22.4",
+[tool.pytest.ini_options]
+markers = [
+  "external: tests requiring external resources such as models or APIs (skipped unless --run-external is passed)",
+]
+
+[dependency-groups]
+dev = [
   "datasets >= 3.1.0",
   "jupyterlab >= 4.3.0",
   "streamlit >= 1.43.0",
   "anywidget >= 0.9.0",
+  "docutils >= 0.22.0",
+  "pytest >= 9.0.2",
+  "pytest-asyncio>=1.3.0",
+  "pyright >= 1.1.0",
+  "soundfile >= 0.12.0",
+  "polars >= 1.0.0",
 ]

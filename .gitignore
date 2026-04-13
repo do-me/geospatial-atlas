@@ -2,10 +2,15 @@
 __pycache__/
 node_modules/
 .ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+.claude/
+
 build/
 dist/
 distlib/
 target/
+
 *.tsbuildinfo
 .svelte-kit/
 .env
@@ -27,3 +32,9 @@ lerna-debug.log*
 
 *.parquet
 *.ipynb
+
+# E2E test artifacts (Playwright)
+e2e/.data/
+e2e/test-results/
+e2e/playwright-report/
+test-results/

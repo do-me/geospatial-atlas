@@ -449,6 +449,11 @@
         center: [x, isGis ? Viewport.unprojectLat(y) : y],
         zoom: zoom,
       });
+
+      // Expose viewport state for E2E drift testing
+      if (typeof window !== "undefined") {
+        (window as any).__geospatialAtlasViewport = { x, y, scale, width, height, isGis };
+      }
     }
   });
 
@@ -473,6 +478,10 @@
           interactive: false,
           attributionControl: false,
         });
+        // Expose map instance for E2E testing (no-op in production bundles via tree-shaking)
+        if (typeof window !== "undefined") {
+          (window as any).__geospatialAtlasMap = map;
+        }
       } else {
         map.setStyle(mapStyle);
       }

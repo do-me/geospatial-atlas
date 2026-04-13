@@ -75,13 +75,62 @@ Then in GitHub → Settings → Pages, set the source to the `gh-pages` branch (
 
 The live site is available at: https://do-me.github.io/geospatial-atlas/
 
+## Testing
+
+End-to-end tests use [Playwright](https://playwright.dev/) and cover both runtime modes (server mode with Python backend, and frontend-only mode with Vite dev server + DuckDB WASM).
+
+**Prerequisites:**
+
+```bash
+npm run build              # server-mode tests need the built viewer
+npx playwright install chromium
+```
+
+On first run the test suite auto-downloads a ~29 MB parquet fixture ([GISCO Education](https://github.com/do-me/geospatial-atlas-apps/tree/main/GISCO_Education)) and caches it in `e2e/.data/` (git-ignored). Override with `E2E_PARQUET_FILE=/path/to/file.parquet` if needed.
+
+**Run all tests:**
+
+```bash
+npx playwright test
+```
+
+**Run a single mode:**
+
+```bash
+npx playwright test --project server-mode
+npx playwright test --project frontend-mode
+```
+
+**View the HTML report** (generated on every run):
+
+```bash
+npx playwright show-report e2e/playwright-report
+```
+
+Test artifacts (traces, screenshots on failure, HTML report) are written to `e2e/test-results/` and `e2e/playwright-report/` — both git-ignored.
+
+### Test structure
+
+```
+e2e/
+├── helpers.ts                # Auto-download, server lifecycle, page helpers
+├── server-mode.spec.ts       # Full-stack: Python backend + pre-built viewer
+│   ├── API                   #   Metadata endpoint, DuckDB query
+│   ├── Rendering             #   Scatter canvas, MapLibre basemap, sidebar
+│   ├── Basemap Alignment     #   Mercator formula, point-vs-map consistency
+│   ├── Interaction           #   Scroll-to-zoom
+│   └── Zoom Drift            #   Scatter-vs-map pixel alignment across zoom levels
+└── frontend-mode.spec.ts     # Browser-only: Vite dev server + DuckDB WASM
+    ├── File Upload           #   Drop zone, parquet upload transition
+    └── Test Data Viewer      #   Synthetic data scatter, UI controls
+```
+
 ## To Do
 
 - Disallow zooming out further than zoom level 0 to avoid weird shifting effects
 - Adapt density and point radius ranges
 - Add basemap attribution
 - Release own "geospatial-atlas" pip package?
-- Test everything properly
 - And much more! Feel free to open PRs!
 
 ---
@@ -191,29 +240,7 @@ For the algorithm that automatically produces clusters and labels in the embeddi
 
 ## Development
 
-This repo contains multiple sub-packages:
-
-Frontend:
-
-- `packages/component`: The `EmbeddingView` and `EmbeddingViewMosaic` components.
-
-- `packages/viewer`: The frontend application for visualizing embedding and other columns. It also provides the `EmbeddingAtlas` component that can be embedded in other applications.
-
-- `packages/density-clustering`: The density clustering algorithm, written in Rust.
-
-- `packages/umap-wasm`: An implementation of UMAP algorithm in WebAssembly (with the [umappp](https://github.com/libscran/umappp) C++ library).
-
-- `packages/embedding-atlas`: The `embedding-atlas` package that get published. It imports all of the above and exposes their API in a single package.
-
-Python:
-
-- `packages/backend`: A Python package named `embedding-atlas` that provides the `embedding-atlas` command line tool.
-
-Documentation:
-
-- `packages/docs`: The documentation website.
-
-For more information, please visit <https://apple.github.io/embedding-atlas/develop.html>.
+For development instructions, please visit <https://apple.github.io/embedding-atlas/develop.html>, or checkout `packages/docs/develop.md`.
 
 ## License
 
