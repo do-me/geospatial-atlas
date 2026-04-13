@@ -100,6 +100,71 @@
       let neighborsColumn: string | undefined;
 
       if (spec.embedding != null && "precomputed" in spec.embedding) {
+        // If a geometry column was detected, extract lon/lat from WKB
+        if (spec.embedding.precomputed.geometryColumn) {
+          const geomCol = spec.embedding.precomputed.geometryColumn;
+          const xCol = spec.embedding.precomputed.x;
+          const yCol = spec.embedding.precomputed.y;
+          logger.info(`Extracting coordinates from geometry column "${geomCol}"...`);
+
+          // Try DuckDB spatial extension first (fastest)
+          let extracted = false;
+          try {
+            await coordinator.exec(`INSTALL spatial; LOAD spatial;`);
+            await coordinator.exec(
+              `ALTER TABLE dataset ADD COLUMN IF NOT EXISTS "${xCol}" DOUBLE;
+               ALTER TABLE dataset ADD COLUMN IF NOT EXISTS "${yCol}" DOUBLE;
+               UPDATE dataset SET
+                 "${xCol}" = ST_X(ST_GeomFromWKB("${geomCol}")),
+                 "${yCol}" = ST_Y(ST_GeomFromWKB("${geomCol}"));`,
+            );
+            extracted = true;
+          } catch {
+            // spatial extension not available in WASM — fall through to JS parsing
+          }
+
+          // Fallback: parse WKB in JavaScript, write back as a new table, then join
+          if (!extracted) {
+            logger.info("Parsing WKB geometry in browser...");
+            const rows = await coordinator.query(
+              `SELECT __row_index__, "${geomCol}" AS geom FROM dataset`,
+            );
+            const lons: number[] = [];
+            const lats: number[] = [];
+            const ids: number[] = [];
+            for (const row of rows) {
+              const wkb: Uint8Array | null = row.geom;
+              if (!wkb || wkb.length < 21) continue;
+              const dv = new DataView(wkb.buffer, wkb.byteOffset, wkb.byteLength);
+              const le = dv.getUint8(0) === 1;
+              const geomType = le ? dv.getUint32(1, true) : dv.getUint32(1, false);
+              if ((geomType & 0xff) !== 1) continue; // only Point
+              let off = 5;
+              if (geomType & 0x20000000) off += 4; // skip SRID
+              if (wkb.length < off + 16) continue;
+              const lon = dv.getFloat64(off, le);
+              const lat = dv.getFloat64(off + 8, le);
+              ids.push(row.__row_index__);
+              lons.push(lon);
+              lats.push(lat);
+            }
+            // Write parsed coordinates back via a temp table
+            const values = ids.map((id, i) => `(${id}, ${lons[i]}, ${lats[i]})`).join(",");
+            await coordinator.exec(
+              `CREATE TEMP TABLE __geo_coords__ (__row_index__ INTEGER, "${xCol}" DOUBLE, "${yCol}" DOUBLE);
+               INSERT INTO __geo_coords__ VALUES ${values};
+               ALTER TABLE dataset ADD COLUMN IF NOT EXISTS "${xCol}" DOUBLE;
+               ALTER TABLE dataset ADD COLUMN IF NOT EXISTS "${yCol}" DOUBLE;
+               UPDATE dataset SET
+                 "${xCol}" = __geo_coords__."${xCol}",
+                 "${yCol}" = __geo_coords__."${yCol}"
+               FROM __geo_coords__
+               WHERE dataset.__row_index__ = __geo_coords__.__row_index__;
+               DROP TABLE __geo_coords__;`,
+            );
+          }
+        }
+
         projectionColumns = {
           x: spec.embedding.precomputed.x,
           y: spec.embedding.precomputed.y,

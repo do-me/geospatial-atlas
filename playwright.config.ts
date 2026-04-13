@@ -40,6 +40,11 @@ export default defineConfig({
       testMatch: "frontend-mode.spec.ts",
       use: { browserName: "chromium" },
     },
+    {
+      name: "gis-detection",
+      testMatch: "gis-detection.spec.ts",
+      use: { browserName: "chromium" },
+    },
   ],
 });
 

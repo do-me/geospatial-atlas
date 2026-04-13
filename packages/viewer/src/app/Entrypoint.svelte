@@ -6,18 +6,39 @@
   import FileViewer from "./FileViewer.svelte";
   import TestDataViewer from "./TestDataViewer.svelte";
 
-  import { resolveAppConfig } from "./app_config.js";
+  import { resolveAppConfig, detectHome } from "./app_config.js";
 
   const config = resolveAppConfig();
 
-  const routes: any = {
-    "/": config.home == "file-viewer" ? FileViewer : BackendViewer,
-  };
+  // If no explicit config was set, auto-detect by probing for the backend.
+  let routes: any = $state(null);
 
-  if (import.meta.env.DEV) {
-    routes["/test"] = TestDataViewer;
-    routes["/file"] = FileViewer;
+  async function init() {
+    let home = config.home;
+    if (typeof window !== "undefined" && (window as any).EMBEDDING_ATLAS_CONFIG == null) {
+      home = await detectHome();
+    }
+
+    const r: any = {
+      "/": home === "file-viewer" ? FileViewer : BackendViewer,
+    };
+
+    if (import.meta.env.DEV) {
+      r["/test"] = TestDataViewer;
+      r["/file"] = FileViewer;
+    }
+
+    // Always expose /file in production too (for standalone static deploys)
+    if (home === "file-viewer") {
+      r["/file"] = FileViewer;
+    }
+
+    routes = r;
   }
+
+  init();
 </script>
 
-<Router routes={routes} />
+{#if routes}
+  <Router {routes} />
+{/if}

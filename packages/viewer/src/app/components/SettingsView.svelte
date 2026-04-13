@@ -10,6 +10,7 @@
 
   import { EMBEDDING_ATLAS_VERSION } from "../../constants.js";
   import { jsTypeFromDBType } from "../../utils/database.js";
+  import { detectGisColumns, type GisDetectionResult } from "../../utils/gis_detection.js";
 
   // Predefined embedding models. The default is the first model.
   const textModels = [
@@ -34,7 +35,7 @@
     text?: string;
     embedding?:
       | {
-          precomputed: { x: string; y: string; neighbors?: string; isGis?: boolean };
+          precomputed: { x: string; y: string; neighbors?: string; isGis?: boolean; geometryColumn?: string };
         }
       | { compute: { column: string; type: "text" | "image"; model: string } };
   }
@@ -62,6 +63,27 @@
   let numericalColumns = $derived(columns.filter((x) => jsTypeFromDBType(x.column_type) == "number"));
   let stringColumns = $derived(columns.filter((x) => jsTypeFromDBType(x.column_type) == "string"));
 
+  // --- Auto GIS detection ---
+  let gisDetection: GisDetectionResult = $state(null);
+
+  $effect.pre(() => {
+    if (columns.length === 0) return;
+    const result = detectGisColumns(columns);
+    gisDetection = result;
+    if (result && result.type === "columns") {
+      embeddingMode = "precomputed";
+      embeddingXColumn = result.xColumn;
+      embeddingYColumn = result.yColumn;
+      embeddingIsGis = true;
+    }
+    if (result && result.type === "geometry") {
+      embeddingMode = "precomputed";
+      embeddingXColumn = result.xColumn;
+      embeddingYColumn = result.yColumn;
+      embeddingIsGis = true;
+    }
+  });
+
   $effect.pre(() => {
     let c = textColumn;
     if (untrack(() => embeddingTextColumn == undefined)) {
@@ -78,6 +100,7 @@
           y: embeddingYColumn,
           neighbors: embeddingNeighborsColumn != undefined ? embeddingNeighborsColumn : undefined,
           isGis: embeddingIsGis,
+          geometryColumn: gisDetection?.type === "geometry" ? gisDetection.geometryColumn : undefined,
         },
       };
     }
@@ -122,6 +145,18 @@
       />
     </div>
     <div class="my-2"></div>
+    <!-- Auto GIS detection banner -->
+    {#if gisDetection}
+      <div class="p-3 rounded-md bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 text-sm text-blue-800 dark:text-blue-200">
+        {#if gisDetection.type === "geometry"}
+          Auto-detected GIS geometry column <strong>{gisDetection.geometryColumn}</strong>.
+          Coordinates will be extracted to <strong>{gisDetection.xColumn}</strong> / <strong>{gisDetection.yColumn}</strong>.
+        {:else}
+          Auto-detected GIS columns: <strong>{gisDetection.xColumn}</strong> (longitude) and <strong>{gisDetection.yColumn}</strong> (latitude).
+        {/if}
+        Settings have been pre-filled — review and confirm below.
+      </div>
+    {/if}
     <!-- Embedding Config -->
     <h2 class="text-slate-500 dark:text-slate-500">Embedding View (optional)</h2>
     <p class="text-sm text-slate-400 dark:text-slate-600">

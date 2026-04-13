@@ -39,3 +39,17 @@ export function resolveAppConfig(): AppConfig {
     ...config,
   };
 }
+
+/**
+ * Auto-detect runtime mode by probing for the backend metadata endpoint.
+ * Returns "backend-viewer" if the backend is serving, "file-viewer" otherwise.
+ */
+export async function detectHome(): Promise<AppConfig["home"]> {
+  try {
+    const res = await fetch("./data/metadata.json");
+    if (res.ok) return "backend-viewer";
+  } catch {
+    // no backend
+  }
+  return "file-viewer";
+}

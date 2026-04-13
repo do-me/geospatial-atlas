@@ -181,3 +181,58 @@ export function projectLat(lat: number): number {
   const latRad = (lat * Math.PI) / 180;
   return (Math.log(Math.tan(Math.PI / 4 + latRad / 2)) * 180) / Math.PI;
 }
+
+// ---------------------------------------------------------------------------
+// Frontend file-upload flow helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Upload a parquet file in the frontend FileViewer, wait for auto-detection,
+ * confirm settings, and wait for the full app (canvas) to render.
+ *
+ * Returns true if the app rendered successfully, false if DuckDB WASM
+ * failed to load the file (e.g. parquet extension unsigned in dev mode).
+ */
+export async function uploadFileAndRender(
+  page: Page,
+  baseUrl: string,
+  filePath: string,
+): Promise<boolean> {
+  await page.goto(`${baseUrl}/#/file`);
+  const { expect } = await import("@playwright/test");
+
+  // Wait for the drop zone
+  await expect(page.locator("text=Drag & drop")).toBeVisible({ timeout: 10_000 });
+
+  // Upload file
+  const fileInput = page.locator('input[type="file"]');
+  await fileInput.setInputFiles(filePath);
+
+  // Wait for drop zone to disappear (loading started)
+  await expect(page.locator("text=Drag & drop")).not.toBeVisible({ timeout: 30_000 });
+
+  // Wait for either Confirm button (settings view) or error
+  const confirmBtn = page.locator("button:has-text('Confirm')");
+  const errorMsg = page.locator("text=Extension Autoloading Error");
+
+  await Promise.race([
+    confirmBtn.waitFor({ timeout: 30_000 }).catch(() => {}),
+    errorMsg.waitFor({ timeout: 30_000 }).catch(() => {}),
+  ]);
+
+  if (await errorMsg.isVisible()) return false;
+  if (!(await confirmBtn.isVisible())) return false;
+
+  // Click Confirm to load the visualization
+  await confirmBtn.click();
+
+  // Wait for full render — canvas should appear
+  try {
+    await waitForCanvas(page, 60_000);
+    await waitForDataRender(page);
+  } catch {
+    return false;
+  }
+
+  return true;
+}

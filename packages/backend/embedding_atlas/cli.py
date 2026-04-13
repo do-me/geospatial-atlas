@@ -140,6 +140,14 @@ def find_available_port(start_port: int, max_attempts: int = 10, host="localhost
 
 
 def find_gis_columns(columns):
+    """Detect GIS coordinate columns using a priority hierarchy.
+
+    Priority:
+      1. Explicit lat/lon pairs: lon/lat, longitude/latitude, lng/lat
+      2. Generic x/y (less reliable but common in GIS tools)
+
+    Returns (x_column, y_column) or (None, None).
+    """
     cols_map = {c.lower(): c for c in columns}
     pairs = [
         ("longitude", "latitude"),
@@ -151,6 +159,91 @@ def find_gis_columns(columns):
         if x_cand in cols_map and y_cand in cols_map:
             return cols_map[x_cand], cols_map[y_cand]
     return None, None
+
+
+def find_geometry_column(df):
+    """Detect a WKB geometry column in the dataframe.
+
+    Checks for geoparquet metadata first (authoritative), then falls back
+    to common column names with binary dtype.
+
+    Returns the column name or None.
+    """
+    # Check geoparquet metadata via pyarrow
+    try:
+        import json
+        import pyarrow as pa
+
+        table = pa.Table.from_pandas(df) if hasattr(df, "dtypes") else None
+        # If loaded with read_parquet, the schema metadata may be on the df attrs
+        schema_meta = getattr(df, "attrs", {}).get("_schema_metadata", None)
+        if schema_meta is None and table is not None:
+            schema_meta = table.schema.metadata
+        if schema_meta and b"geo" in schema_meta:
+            geo = json.loads(schema_meta[b"geo"])
+            primary = geo.get("primary_column")
+            if primary and primary in df.columns:
+                return primary
+    except Exception:
+        pass
+
+    # Fallback: look for common geometry column names with binary/object dtype
+    for name in ["geometry", "geom", "wkb_geometry", "the_geom", "geo"]:
+        for col in df.columns:
+            if col.lower() == name and df[col].dtype == "object":
+                # Check if first non-null value looks like WKB
+                sample = df[col].dropna().head(1)
+                if len(sample) > 0 and isinstance(sample.iloc[0], (bytes, bytearray)):
+                    return col
+    return None
+
+
+def extract_coordinates_from_geometry(df, geom_column):
+    """Extract lon/lat columns from a WKB geometry column using struct.
+
+    Only supports Point geometries (WKB type 1). Falls back to DuckDB
+    spatial if available for other geometry types.
+    """
+    import struct
+
+    def parse_wkb_point(wkb):
+        """Parse a WKB Point and return (lon, lat)."""
+        if wkb is None or not isinstance(wkb, (bytes, bytearray)):
+            return (None, None)
+        if len(wkb) < 21:
+            return (None, None)
+        byte_order = wkb[0]
+        fmt_i = "<I" if byte_order == 1 else ">I"
+        fmt_dd = "<dd" if byte_order == 1 else ">dd"
+        geom_type = struct.unpack(fmt_i, wkb[1:5])[0]
+        # Type 1 = Point, 0x80000001 = Point with SRID
+        base_type = geom_type & 0xFF
+        if base_type != 1:
+            return (None, None)
+        offset = 5
+        if geom_type & 0x20000000:  # has SRID
+            offset += 4
+        if len(wkb) < offset + 16:
+            return (None, None)
+        x, y = struct.unpack(fmt_dd, wkb[offset : offset + 16])
+        return (x, y)
+
+    coords = df[geom_column].apply(parse_wkb_point)
+    lon_col = find_column_name(set(df.columns), "lon")
+    lat_col = find_column_name(set(df.columns), "lat")
+    df[lon_col] = coords.apply(lambda c: c[0])
+    df[lat_col] = coords.apply(lambda c: c[1])
+
+    # Drop rows where extraction failed
+    valid = df[lon_col].notna() & df[lat_col].notna()
+    if not valid.all():
+        n_dropped = (~valid).sum()
+        logger.warning(
+            f"Dropped {n_dropped} rows with non-point or invalid geometries"
+        )
+        df = df[valid].reset_index(drop=True)
+
+    return df, lon_col, lat_col
 
 
 def import_modules(names: list[str]):
@@ -395,6 +488,7 @@ def main(
 
     is_gis = False
     if x_column is None or y_column is None:
+        # Priority 1: Named lat/lon columns (most explicit)
         detected_x, detected_y = find_gis_columns(df.columns)
         if detected_x is not None and detected_y is not None:
             if x_column is None:
@@ -403,6 +497,21 @@ def main(
                 y_column = detected_y
             is_gis = True
             print(f"Detected GIS columns: x={x_column}, y={y_column}")
+
+        # Priority 2: Geometry column (geoparquet / WKB) — only if no named columns found
+        if x_column is None or y_column is None:
+            geom_col = find_geometry_column(df)
+            if geom_col is not None:
+                print(f"Detected geometry column: {geom_col}")
+                df, extracted_x, extracted_y = extract_coordinates_from_geometry(
+                    df, geom_col
+                )
+                if x_column is None:
+                    x_column = extracted_x
+                if y_column is None:
+                    y_column = extracted_y
+                is_gis = True
+                print(f"Extracted GIS coordinates: x={x_column}, y={y_column}")
 
     if enable_projection and (x_column is None or y_column is None):
         # No x, y column selected, first see if text/image/vectors column is specified, if not, ask for it
