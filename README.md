@@ -5,7 +5,9 @@ It can **visualize up to ~200M points** in your WebGPU-enabled browser! Make sur
 
 Find various example apps [here](https://github.com/do-me/geospatial-atlas-apps). Try for example the [6M GlobalGeoTree explorer](https://do-me.github.io/geospatial-atlas-apps/GlobalGeoTree/)! Load your own data (up to around 6M points) here: https://do-me.github.io/geospatial-atlas/app/!
 
-[LinkedIn Post for more context](https://www.linkedin.com/posts/dominik-weckm%C3%BCller_geospatial-atlas-is-born-explore-100m-points-activity-7411826555179429890-CiHX?utm_source=share&utm_medium=member_desktop&rcm=ACoAAC8q3V4BiZXfSx0JnRGDOF3d6Fzu4HdRtDE)
+You can load the data from a remote URL too! Clicking this link, you download 100Mb of geolocated Wikipedia articles: https://do-me.github.io/geospatial-atlas/app/#?data=https://pub-016504dd3a4d419a9c17a8939840935e.r2.dev/v1/wikipedia_geotagged.parquet
+
+[LinkedIn Post for more context](https://www.linkedin.com/posts/dominik-weckm%C3%BCller_geospatial-atlas-is-born-explore-100m-points-activity-7411826555179429890-CiHX)
 
 ## Example screenshots
 
@@ -15,6 +17,7 @@ Find various example apps [here](https://github.com/do-me/geospatial-atlas-apps)
 ![alt text](screenshots/image.png)
 ![alt text](screenshots/image-1.png)
 ![alt text](screenshots/image-2.png)
+<img width="3440" height="1307" alt="image" src="https://github.com/user-attachments/assets/daa1d31b-5b46-4c24-96d6-bad56e609d0c" />
 
 ## Installation
 
