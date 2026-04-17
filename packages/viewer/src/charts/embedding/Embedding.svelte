@@ -211,6 +211,8 @@
     }
     currentViewportAnimation = requestAnimationFrame(callback);
   }
+
+
 </script>
 
 <div class="relative">

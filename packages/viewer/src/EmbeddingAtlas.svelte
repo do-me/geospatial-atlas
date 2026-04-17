@@ -31,6 +31,8 @@
     IconSettings,
   } from "./assets/icons.js";
 
+  import GeocoderSearch from "./charts/embedding/GeocoderSearch.svelte";
+
   import type { EmbeddingAtlasProps, EmbeddingAtlasState } from "./api.js";
   import { ChartContextCache, type ChartContext, type ChartDelegate, type RowID } from "./charts/chart.js";
   import { type ChartThemeConfig } from "./charts/common/theme.js";
@@ -73,6 +75,25 @@
   let initialized = $state(false);
 
   let exportFormat: "json" | "jsonl" | "csv" | "parquet" = $state("parquet");
+
+  let isGis = $derived(data.projection?.isGis ?? false);
+
+  function flyToLocation(lon: number, lat: number) {
+    // Web Mercator projection (same as Viewport.projectLat)
+    const latRad = (lat * Math.PI) / 180;
+    const projectedY = (Math.log(Math.tan(Math.PI / 4 + latRad / 2)) * 180) / Math.PI;
+    const cityScale = 1024 / (360 * 0.15);
+    // Find the embedding chart and update its viewport
+    for (const [id, spec] of Object.entries(charts)) {
+      if (spec.type === "embedding") {
+        chartStates = {
+          ...chartStates,
+          [id]: { ...chartStates[id], viewport: { x: lon, y: projectedY, scale: cityScale } },
+        };
+        break;
+      }
+    }
+  }
 
   const crossFilter = Selection.crossfilter();
 
@@ -445,6 +466,9 @@
             <div class="text-slate-500 dark:text-slate-400">Embedding Atlas</div>
           {/if}
         </div>
+        {#if isGis}
+          <GeocoderSearch onSelect={(lon, lat) => flyToLocation(lon, lat)} />
+        {/if}
         <!-- Right side -->
         <div
           class="flex flex-none gap-2 items-center pl-2 rounded-md border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900"
