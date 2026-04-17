@@ -107,16 +107,29 @@
           const yCol = spec.embedding.precomputed.y;
           logger.info(`Extracting coordinates from geometry column "${geomCol}"...`);
 
-          // Try DuckDB spatial extension first (fastest)
+          // Try DuckDB spatial extension first (fastest). Handle both
+          // legacy BLOB/WKB columns (need ST_GeomFromWKB) and native
+          // GeoParquet GEOMETRY columns (ST_X / ST_Y directly).
           let extracted = false;
           try {
             await coordinator.exec(`INSTALL spatial; LOAD spatial;`);
+            const describeRows = (await coordinator.query(
+              `DESCRIBE TABLE dataset`,
+            )) as unknown as { column_name: string; column_type: string }[];
+            const geomType = Array.from(describeRows).find(
+              (r) => r.column_name === geomCol,
+            )?.column_type;
+            const isNativeGeometry =
+              typeof geomType === "string" && geomType.toUpperCase().startsWith("GEOMETRY");
+            const geomExpr = isNativeGeometry
+              ? `"${geomCol}"`
+              : `ST_GeomFromWKB("${geomCol}")`;
             await coordinator.exec(
               `ALTER TABLE dataset ADD COLUMN IF NOT EXISTS "${xCol}" DOUBLE;
                ALTER TABLE dataset ADD COLUMN IF NOT EXISTS "${yCol}" DOUBLE;
                UPDATE dataset SET
-                 "${xCol}" = ST_X(ST_GeomFromWKB("${geomCol}")),
-                 "${yCol}" = ST_Y(ST_GeomFromWKB("${geomCol}"));`,
+                 "${xCol}" = ST_X(${geomExpr}),
+                 "${yCol}" = ST_Y(${geomExpr});`,
             );
             extracted = true;
           } catch {

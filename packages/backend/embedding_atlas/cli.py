@@ -252,6 +252,181 @@ def import_modules(names: list[str]):
         importlib.import_module(name)
 
 
+def _try_fast_load(
+    *,
+    inputs: list[str],
+    splits: list[str],
+    query: str | None,
+    sample: int | None,
+    text: str | None,
+    image: str | None,
+    audio: str | None,
+    vector: str | None,
+    x_column: str | None,
+    y_column: str | None,
+    duckdb_uri: str,
+):
+    """Return a populated DuckDB connection for the fast path, or ``None``
+    if any condition rules it out. Conditions:
+
+      * exactly one input
+      * ``.parquet`` extension on disk
+      * no HuggingFace splits, ``--query``, or ``--sample``
+      * no embedding modality (text/image/audio/vector) — we'd need
+        pandas to run the projection
+      * ``--duckdb server`` (fast path only helps server-mode today)
+
+    The fast path still respects ``x_column`` / ``y_column`` if set, but
+    for the common case of auto-detection it uses the logic from
+    :mod:`.fast_load`.
+    """
+    if len(inputs) != 1:
+        return None
+    if splits:
+        return None
+    if query is not None or sample is not None:
+        return None
+    if text or image or audio or vector:
+        return None
+    if duckdb_uri != "server":
+        return None
+    path = inputs[0]
+    if path.startswith("hf://") or not pathlib.Path(path).is_file():
+        return None
+    if pathlib.Path(path).suffix.lower() != ".parquet":
+        return None
+
+    from .fast_load import fast_load_parquet
+
+    def _print(stage: str, pct: float, detail: str) -> None:
+        if stage == "load":
+            # Overwriting progress bar would require carriage returns; keep it
+            # simple and log at every ~10% step.
+            if int(pct) % 10 == 0:
+                print(f"  [{stage}] {pct:5.1f}%  {detail}")
+        else:
+            print(f"  [{stage}] {detail}")
+
+    try:
+        result = fast_load_parquet(path, progress=_print)
+    except Exception as e:
+        print(f"(fast loader unavailable: {e} — falling back to pandas)")
+        return None
+
+    # Wire x_column / y_column overrides — the fast path only returns
+    # auto-detected columns; users may override.
+    if x_column and x_column != result.x_column:
+        return None  # fall back to slow path
+    if y_column and y_column != result.y_column:
+        return None
+    return result
+
+
+def _run_fast_path(
+    *,
+    fast_connection,
+    static: str | None,
+    host: str,
+    port: int,
+    enable_auto_port: bool,
+    enable_mcp: bool,
+    cors,
+    duckdb_uri: str,
+):
+    """Serve the pre-populated DuckDB connection via FastAPI+uvicorn.
+
+    Mirrors the relevant tail end of :func:`main` without the pandas
+    bookkeeping.
+    """
+    from .cache import sha256_hexdigest
+    from .data_source import DataSource
+    from .options import make_embedding_atlas_props
+    from .server import make_server
+    from .version import __version__
+
+    con = fast_connection.connection
+    # Ensure the viewer has an id column.
+    cols = [r[0] for r in con.sql(f'PRAGMA table_info("{fast_connection.table}")').fetchall()]
+    id_col = "__row_index__"
+    i = 1
+    while id_col in cols:
+        id_col = f"__row_index___{i}"
+        i += 1
+    con.sql(
+        f'ALTER TABLE "{fast_connection.table}" ADD COLUMN "{id_col}" BIGINT DEFAULT 0'
+    )
+    con.sql(f'UPDATE "{fast_connection.table}" SET "{id_col}" = rowid')
+
+    props = make_embedding_atlas_props(
+        row_id=id_col,
+        x=fast_connection.x_column,
+        y=fast_connection.y_column,
+        neighbors=None,
+        text=None,
+        point_size=None,
+        stop_words=None,
+        labels=None,
+        is_gis=True,
+    )
+    metadata = {"props": props}
+    identifier = sha256_hexdigest(
+        [__version__, [fast_connection.table], metadata], scope="DataSource"
+    )
+    data_source = DataSource(identifier, None, metadata)
+
+    if static is None:
+        static = str((pathlib.Path(__file__).parent / "static").resolve())
+
+    cors_config = False
+    if cors is not None:
+        if cors == "":
+            cors_config = True
+        else:
+            cors_config = [
+                domain.strip() for domain in cors.split(",") if domain.strip()
+            ]
+
+    app = make_server(
+        data_source,
+        static_path=static,
+        duckdb_uri=duckdb_uri,
+        mcp=enable_mcp,
+        cors=cors_config,
+        duckdb_connection=con,
+    )
+
+    new_port = (
+        find_available_port(port, max_attempts=10, host=host)
+        if enable_auto_port
+        else port
+    )
+    if new_port != port:
+        logger.info(f"Port {port} is not available, using {new_port}")
+
+    print()
+    print(click.style("-" * 79, dim=True))
+    print()
+    print(
+        f"  {click.style('🚀 Geospatial Atlas', fg='green', bold=True)}  "
+        f"{click.style('v' + __version__, fg='green')}  "
+        f"{click.style('(fast-load)', fg='yellow')}"
+    )
+    print(
+        f"  {click.style(f'✓ loaded {fast_connection.row_count:,} rows in {fast_connection.duration_seconds:.2f}s', dim=True)}"
+    )
+    print()
+    print(f"  ➜ URL: {click.style(f'http://{host}:{new_port}', fg='cyan', bold=True)}")
+    print(click.style("  ➜ Press CTRL+C to quit", dim=True))
+    print()
+    print(click.style("-" * 79, dim=True))
+
+    import logging as _logging
+
+    uvicorn.run(
+        app, port=new_port, host=host, access_log=False, log_level=_logging.ERROR
+    )
+
+
 @click.command()
 @click.argument("inputs", nargs=-1, required=True)
 @click.option("--text", default=None, help="Column containing text data.")
@@ -483,6 +658,35 @@ def main(
 
     if with_modules is not None:
         import_modules(with_modules)
+
+    # DuckDB-native fast path: on a single-parquet GIS input with no
+    # pandas-specific transformations, we can skip pandas entirely and
+    # let DuckDB read the parquet + extract coordinates with ST_X/ST_Y.
+    # On large files (75M+ rows) this takes ~5 s instead of 10+ minutes.
+    fast_connection = _try_fast_load(
+        inputs=list(inputs),
+        splits=list(split) if split else [],
+        query=query,
+        sample=sample,
+        text=text,
+        image=image,
+        audio=audio,
+        vector=vector,
+        x_column=x_column,
+        y_column=y_column,
+        duckdb_uri=duckdb,
+    )
+    if fast_connection is not None:
+        return _run_fast_path(
+            fast_connection=fast_connection,
+            static=static,
+            host=host,
+            port=port,
+            enable_auto_port=enable_auto_port,
+            enable_mcp=enable_mcp,
+            cors=cors,
+            duckdb_uri=duckdb,
+        )
 
     df = load_datasets(inputs, splits=split, query=query, sample=sample)
 

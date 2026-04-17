@@ -28,9 +28,16 @@ class DataSource:
     def __init__(
         self,
         identifier: str,
-        dataset: pd.DataFrame,
+        dataset: "pd.DataFrame | None",
         metadata: dict,
     ):
+        """Wraps a dataset plus metadata and a local cache store.
+
+        ``dataset`` may be ``None`` for fast-path server-mode loads that
+        keep the data inside a DuckDB connection and never materialize a
+        pandas DataFrame. In that case the ``/data/dataset.parquet`` and
+        archive-export endpoints lazily rebuild the parquet from DuckDB.
+        """
         self.identifier = identifier
         self.dataset = dataset
         self.metadata = metadata

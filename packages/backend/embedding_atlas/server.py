@@ -26,8 +26,17 @@ def make_server(
     mcp: bool = False,
     cors: bool | list[str] = False,
     duckdb_uri: str | None = None,
+    duckdb_connection: "duckdb.DuckDBPyConnection | None" = None,
 ):
-    """Creates a server for hosting Geospatial Atlas"""
+    """Creates a server for hosting Geospatial Atlas.
+
+    If ``duckdb_connection`` is provided, it is used as-is for server-mode
+    queries (skipping the pandas-DF-based ``make_duckdb_connection``). This
+    lets callers build a DuckDB table directly from Parquet via
+    ``read_parquet`` and skip the pandas materialization, which for large
+    geospatial files (tens of millions of rows) turns a minutes-long load
+    into a few seconds.
+    """
 
     app = FastAPI()
 
@@ -49,11 +58,21 @@ def make_server(
                 expose_headers=["*"],
             )
 
+    def _dataset_parquet_bytes() -> bytes:
+        if data_source.dataset is not None:
+            return to_parquet_bytes(data_source.dataset)
+        # Fast-path: dataset was loaded directly into DuckDB; materialize
+        # the full table on demand. This endpoint is only hit for
+        # archive export / wasm fallback paths.
+        if duckdb_connection is not None:
+            return to_parquet_bytes(duckdb_connection.sql("SELECT * FROM dataset").df())
+        raise RuntimeError("no dataset available to serialize")
+
     mount_bytes(
         app,
         "/data/dataset.parquet",
         "application/octet-stream",
-        lambda: to_parquet_bytes(data_source.dataset),
+        _dataset_parquet_bytes,
     )
 
     @app.get("/data/metadata.json")
@@ -104,7 +123,8 @@ def make_server(
         return Response(content=data, media_type="application/zip")
 
     if duckdb_uri == "server":
-        duckdb_connection = make_duckdb_connection(data_source.dataset)
+        if duckdb_connection is None:
+            duckdb_connection = make_duckdb_connection(data_source.dataset)
     else:
         duckdb_connection = None
 

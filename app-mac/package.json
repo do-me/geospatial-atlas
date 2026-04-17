@@ -1,0 +1,28 @@
+{
+  "name": "geospatial-atlas-mac",
+  "private": true,
+  "version": "0.20.0",
+  "type": "module",
+  "scripts": {
+    "dev:ui": "vite",
+    "build:ui": "vite build",
+    "build:sidecar": "bash python-sidecar/build.sh",
+    "build:sidecar:arm64": "TARGET_TRIPLE=aarch64-apple-darwin bash python-sidecar/build.sh",
+    "build:sidecar:x86_64": "TARGET_TRIPLE=x86_64-apple-darwin bash python-sidecar/build.sh",
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.0.0",
+    "@tauri-apps/cli": "^2.2.4",
+    "svelte": "^5.54.1",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.1"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.2.0",
+    "@tauri-apps/plugin-dialog": "^2.2.0",
+    "@tauri-apps/plugin-shell": "^2.2.0"
+  }
+}

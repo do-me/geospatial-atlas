@@ -1,0 +1,167 @@
+name: app-mac release
+
+# Builds the native macOS app (Tauri 2 shell + PyInstaller sidecar) for
+# both Apple Silicon and Intel. Artifacts:
+#   - Geospatial Atlas_<version>_aarch64.dmg
+#   - Geospatial Atlas_<version>_x64.dmg
+#
+# Trigger manually via the Actions tab or by pushing a tag shaped like
+# `app-mac-v0.20.0`. On tag push, the built DMGs are attached to a draft
+# GitHub Release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Attach built DMGs to a draft release"
+        required: false
+        default: "false"
+  push:
+    tags:
+      - "app-mac-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+            runner: macos-14
+          - arch: x64
+            target: x86_64-apple-darwin
+            runner: macos-13
+    env:
+      TARGET_TRIPLE: ${{ matrix.target }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.4.24"
+          enable-cache: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app-mac/src-tauri -> target
+          shared-key: ${{ matrix.target }}
+
+      - name: Install root npm deps
+        run: npm ci
+
+      - name: Install viewer npm deps
+        run: npm --prefix packages/viewer install
+
+      - name: Sync backend Python env
+        working-directory: packages/backend
+        run: uv sync --frozen
+
+      - name: Build viewer + backend static bundle
+        working-directory: packages/backend
+        run: ./build.sh
+
+      - name: Install app-mac npm deps
+        working-directory: app-mac
+        run: npm install
+
+      - name: Generate app icons
+        working-directory: app-mac
+        run: |
+          if [ ! -f src-tauri/icons/icon.icns ]; then
+            uv --project ../packages/backend run --with Pillow \
+              python src-tauri/icons/make_icons.py
+          fi
+
+      - name: Build PyInstaller sidecar
+        working-directory: app-mac
+        run: bash python-sidecar/build.sh
+
+      - name: Build Tauri app
+        working-directory: app-mac
+        env:
+          # Signing & notarization — omit if not configured; the build still
+          # succeeds but the resulting .app won't pass Gatekeeper.
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Speed: disable incremental and strip to cut bundle size.
+          CARGO_INCREMENTAL: "0"
+        run: npx tauri build --target ${{ matrix.target }}
+
+      - name: Locate artifacts
+        id: locate
+        working-directory: app-mac
+        run: |
+          DMG=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg | head -1)
+          APP_DIR=$(ls -d src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app | head -1)
+          echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
+          echo "app=$APP_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Tar .app for upload
+        working-directory: app-mac
+        run: |
+          TAR="src-tauri/target/${{ matrix.target }}/release/bundle/geospatial-atlas-${{ matrix.arch }}.app.tar.gz"
+          tar -C "$(dirname "${{ steps.locate.outputs.app }}")" \
+              -czf "$TAR" "$(basename "${{ steps.locate.outputs.app }}")"
+          echo "tar=$TAR" >> "$GITHUB_ENV"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: geospatial-atlas-${{ matrix.arch }}-dmg
+          path: ${{ steps.locate.outputs.dmg }}
+          if-no-files-found: error
+
+      - name: Upload .app.tar.gz artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: geospatial-atlas-${{ matrix.arch }}-app
+          path: app-mac/${{ env.tar }}
+          if-no-files-found: error
+
+  release:
+    name: draft release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/app-mac-v') || github.event.inputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: geospatial-atlas-*-dmg
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: ls -la dist
+
+      - name: Attach DMGs to draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: dist/*.dmg
+          fail_on_unmatched_files: true

@@ -5,6 +5,7 @@
   import BackendViewer from "./BackendViewer.svelte";
   import FileViewer from "./FileViewer.svelte";
   import TestDataViewer from "./TestDataViewer.svelte";
+  import WebGPUBanner from "./components/WebGPUBanner.svelte";
 
   import { resolveAppConfig, detectHome } from "./app_config.js";
 
@@ -38,6 +39,8 @@
 
   init();
 </script>
+
+<WebGPUBanner />
 
 {#if routes}
   <Router {routes} />
