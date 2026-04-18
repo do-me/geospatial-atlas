@@ -91,13 +91,6 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      # The root lockfile pins @rolldown/binding-darwin-arm64 (generated
-      # on an M-series Mac) as a non-optional dep. Drop it so each CI
-      # runner resolves its own platform-matching native binding.
-      - name: Drop host-locked lockfile
-        shell: bash
-        run: rm -f package-lock.json
-
       - name: Install npm workspaces (root → component, viewer, backend, …)
         run: npm install --no-audit --no-fund
 

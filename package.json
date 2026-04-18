@@ -27,10 +27,6 @@
     "prettier-plugin-svelte": "^3.5.1"
   },
   "dependencies": {
-    "@rolldown/binding-darwin-arm64": "^1.0.0-rc.15",
     "svelte": "^5.54.1"
-  },
-  "optionalDependencies": {
-    "lightningcss-darwin-arm64": "^1.30.2"
   }
 }
