@@ -97,10 +97,14 @@ class MCPBridge:
         handler = self._get_handler()
         if handler is not None and handler.is_connected:
             try:
-                rpc_response = await handler.send_request(
+                envelope = await handler.send_request(
                     {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
                 )
-                raw_tools = (rpc_response or {}).get("tools") or []
+                # The viewer sends back a JSON-RPC envelope
+                # {jsonrpc, id, result: {tools: [...]}, error: null}
+                # — unwrap to get the actual tools list.
+                result = (envelope or {}).get("result") or {}
+                raw_tools = result.get("tools") or []
                 tools = [self._to_tool(t) for t in raw_tools if isinstance(t, dict)]
                 if tools:
                     self._cached_tools = tools
@@ -138,7 +142,7 @@ class MCPBridge:
             ]
 
         try:
-            rpc_response = await handler.send_request(
+            envelope = await handler.send_request(
                 {
                     "jsonrpc": "2.0",
                     "id": 1,
@@ -149,9 +153,16 @@ class MCPBridge:
         except Exception as e:
             return [types.TextContent(type="text", text=f"Viewer RPC error: {e}")]
 
-        # Same unwrap consideration as _list_tools: the WebSocket helper
-        # returns the bare result object already, e.g. {"content":[...]}.
-        result = rpc_response or {}
+        # Unwrap JSON-RPC envelope {jsonrpc, id, result, error} the viewer
+        # sends. The actual tool result is under `.result`.
+        envelope = envelope or {}
+        rpc_error = envelope.get("error")
+        if rpc_error:
+            raise RuntimeError(
+                f"{rpc_error.get('message', 'RPC error')} "
+                f"(code {rpc_error.get('code', '?')})"
+            )
+        result = envelope.get("result") or {}
         raw_content = result.get("content") or []
         content: list[types.ContentBlock] = []
         for block in raw_content:
