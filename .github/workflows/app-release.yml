@@ -79,7 +79,9 @@ jobs:
             packages/density-clustering -> target
           shared-key: ${{ matrix.target }}
 
-      # Linux: WebKitGTK + GTK for the Tauri webview, plus appindicator for tray support.
+      # Linux: WebKitGTK + GTK for the Tauri webview, appindicator for tray,
+      # rpm/rpmbuild so 'tauri build' can emit the .rpm target (included in
+      # tauri.conf.json's "targets": "all").
       - name: Install Linux system deps
         if: matrix.os == 'linux'
         run: |
@@ -89,7 +91,8 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            rpm
 
       - name: Install npm workspaces (root → component, viewer, backend, …)
         run: npm install --no-audit --no-fund
