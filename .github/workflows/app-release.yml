@@ -169,7 +169,7 @@ jobs:
 
       - name: Build PyInstaller sidecar
         working-directory: apps/desktop
-        run: node python-sidecar/build.js
+        run: node python-sidecar/build.cjs
 
       - name: Build Tauri app
         working-directory: apps/desktop
