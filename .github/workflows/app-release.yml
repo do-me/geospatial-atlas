@@ -155,45 +155,56 @@ jobs:
 
       - name: Build Tauri app (unsigned)
         working-directory: apps/desktop
+        shell: bash
         env:
           # v0.0.1 ships unsigned. Empty APPLE_CERTIFICATE would otherwise
           # trigger Tauri's signing path and fail with "security import".
           # When you enable signing, wire the APPLE_* + WINDOWS_* secrets
           # back into this env block.
           CARGO_INCREMENTAL: "0"
-        run: npx tauri build --target ${{ matrix.target }}
+        run: |
+          case "${{ matrix.os }}" in
+            macos)   bundles="app,dmg" ;;
+            # Skip AppImage for v0.0.1 — linuxdeploy has runtime issues
+            # on the ubuntu-22.04 runner (requires libfuse2 + DISPLAY).
+            # Users on Linux get .deb and .rpm.
+            linux)   bundles="deb,rpm" ;;
+            windows) bundles="msi,nsis" ;;
+          esac
+          npx tauri build --target ${{ matrix.target }} --bundles "$bundles"
 
-      - name: Collect artifacts
-        id: collect
+      # Rename each bundle to a simple, space-free filename so the release
+      # page is cleaner AND so upload-artifact's glob doesn't trip on
+      # spaces (known v4 quirk where "dist-artifacts/**" silently
+      # matched zero files when the dir contained a file with spaces).
+      - name: Collect artifacts (rename to space-free names)
         working-directory: apps/desktop
         shell: bash
         run: |
-          mkdir -p ../dist-artifacts
+          mkdir -p "$GITHUB_WORKSPACE/dist-artifacts"
+          DST="$GITHUB_WORKSPACE/dist-artifacts"
+          BASE="geospatial-atlas-${{ matrix.os }}-${{ matrix.arch }}"
+          TGT=src-tauri/target/${{ matrix.target }}/release/bundle
           case "${{ matrix.os }}" in
             macos)
-              cp src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg ../dist-artifacts/ 2>/dev/null || true
+              f=$(ls "$TGT"/dmg/*.dmg 2>/dev/null | head -1) && cp "$f" "$DST/$BASE.dmg"
               ;;
             linux)
-              cp src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb ../dist-artifacts/ 2>/dev/null || true
-              cp src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage ../dist-artifacts/ 2>/dev/null || true
-              cp src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm ../dist-artifacts/ 2>/dev/null || true
+              f=$(ls "$TGT"/deb/*.deb 2>/dev/null | head -1) && cp "$f" "$DST/$BASE.deb"
+              f=$(ls "$TGT"/rpm/*.rpm 2>/dev/null | head -1) && cp "$f" "$DST/$BASE.rpm"
               ;;
             windows)
-              cp src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi ../dist-artifacts/ 2>/dev/null || true
-              cp src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe ../dist-artifacts/ 2>/dev/null || true
+              f=$(ls "$TGT"/msi/*.msi 2>/dev/null | head -1) && cp "$f" "$DST/$BASE.msi"
+              f=$(ls "$TGT"/nsis/*.exe 2>/dev/null | head -1) && cp "$f" "$DST/$BASE-setup.exe"
               ;;
           esac
-          ls -la ../dist-artifacts/
+          ls -la "$DST/"
 
-      # upload-artifact@v4 doesn't reliably resolve 'dist-artifacts' or
-      # 'dist-artifacts/*' as a bare path on some runners (issue observed
-      # with filenames containing spaces). Explicit ** recursive glob
-      # under the absolute workspace path is bulletproof.
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: geospatial-atlas-${{ matrix.os }}-${{ matrix.arch }}
-          path: ${{ github.workspace }}/dist-artifacts/**
+          path: ${{ github.workspace }}/dist-artifacts/*
           if-no-files-found: error
 
   release:
@@ -221,7 +232,6 @@ jobs:
           files: |
             dist/*.dmg
             dist/*.deb
-            dist/*.AppImage
             dist/*.rpm
             dist/*.msi
             dist/*.exe
