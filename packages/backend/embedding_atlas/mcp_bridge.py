@@ -86,33 +86,40 @@ class MCPBridge:
         )
 
     async def _list_tools(self) -> list[types.Tool]:
-        """Ask the viewer what tools it supports. Cached after first success."""
+        """Return the canonical tool list. If the viewer is connected we ask
+        it for authoritative descriptors; otherwise we fall back to the
+        hardcoded ``mcp_tools.CANONICAL_TOOLS`` so Claude Desktop always
+        sees the 19 tools even before the viewer tab is open.
+
+        Calling a tool while the viewer is disconnected returns a clear
+        ``TextContent`` error pointing the user to the viewer URL.
+        """
         handler = self._get_handler()
-        if handler is None or not handler.is_connected:
-            if self._cached_tools is not None:
-                logger.warning("MCP list_tools: viewer disconnected, returning cached list")
-                return self._cached_tools
-            logger.warning(
-                "MCP list_tools: no viewer connected — open the Geospatial Atlas "
-                "viewer in a browser at http://<host>:<port>/ to enable tools"
-            )
-            return []
+        if handler is not None and handler.is_connected:
+            try:
+                rpc_response = await handler.send_request(
+                    {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+                )
+                raw_tools = (rpc_response or {}).get("tools") or []
+                tools = [self._to_tool(t) for t in raw_tools if isinstance(t, dict)]
+                if tools:
+                    self._cached_tools = tools
+                    return tools
+            except Exception as e:
+                logger.warning(f"MCP list_tools: viewer forward failed: {e}")
 
-        try:
-            # WebSocketHandler.send_request already unwraps the JSON-RPC
-            # envelope — what comes back is the viewer's bare result
-            # object, i.e. {"tools": [...]}.
-            rpc_response = await handler.send_request(
-                {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
-            )
-        except Exception as e:
-            logger.warning(f"MCP list_tools: forward failed: {e}")
-            return self._cached_tools or []
+        if self._cached_tools is not None:
+            return self._cached_tools
 
-        raw_tools = (rpc_response or {}).get("tools") or []
-        tools = [self._to_tool(t) for t in raw_tools if isinstance(t, dict)]
-        self._cached_tools = tools
-        return tools
+        # Fallback: canonical, hardcoded list. Keeps Claude Desktop happy
+        # from the moment the server comes up — no need for the viewer
+        # tab to exist just to enumerate tools.
+        from .mcp_tools import CANONICAL_TOOLS
+
+        return [
+            types.Tool(name=n, description=d, inputSchema=s)
+            for (n, d, s) in CANONICAL_TOOLS
+        ]
 
     async def _call_tool(
         self, name: str, arguments: dict[str, Any]
