@@ -1034,8 +1034,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "geospatial-atlas-mac"
-version = "0.20.0"
+name = "geospatial-atlas-desktop"
+version = "0.0.1"
 dependencies = [
  "portpicker",
  "reqwest 0.12.28",
@@ -4074,6 +4074,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",

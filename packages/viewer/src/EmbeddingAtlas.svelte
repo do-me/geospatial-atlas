@@ -463,7 +463,7 @@
               {/if}
             </div>
           {:else}
-            <div class="text-slate-500 dark:text-slate-400">Embedding Atlas</div>
+            <div class="text-slate-500 dark:text-slate-400">Geospatial Atlas</div>
           {/if}
         </div>
         {#if isGis}

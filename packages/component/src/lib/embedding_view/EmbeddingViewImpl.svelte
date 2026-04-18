@@ -281,6 +281,11 @@
   let mapStyle = $derived(
     isGis ? (config?.mapStyle !== undefined ? config.mapStyle : "https://tiles.openfreemap.org/styles/liberty") : null,
   );
+  let basemapAttribution = $derived(
+    typeof mapStyle === "string" && mapStyle.toLowerCase().includes("openfreemap")
+      ? "OpenFreeMap © OpenMapTiles Data from OpenStreetMap"
+      : null,
+  );
 
   let viewingParams = $derived(
     viewingParameters(
@@ -981,6 +986,7 @@
       pointCount={data.x.length}
       selectionMode={selectionMode}
       onSelectionMode={(v) => (selectionMode = v)}
+      basemapAttribution={basemapAttribution}
     />
   {/if}
 </div>

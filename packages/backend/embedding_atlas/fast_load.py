@@ -7,7 +7,7 @@ and (when needed) extracts coordinates via ``ST_X``/``ST_Y``. On a
 75 M-row / 4 GB file this cuts load time from ~15+ minutes to ~5 seconds.
 
 Used by:
-  * ``app-mac`` sidecar — always.
+  * ``apps/desktop`` sidecar — always.
   * ``packages/backend`` CLI (``geospatial-atlas``) — auto-selected when
     inputs are a single Parquet with no ``--query``/``--sample`` and
     no embedding generation is requested.

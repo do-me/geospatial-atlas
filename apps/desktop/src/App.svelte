@@ -22,6 +22,7 @@
   let webgpu: WebGPU = $state({ state: "probing" });
   let progress: Progress | null = $state(null);
   let topN: string = $state("");
+  let textCol: string = $state("");
 
   const STAGE_LABEL: Record<string, string> = {
     analyze: "Opening file",
@@ -102,8 +103,9 @@
     progress = null;
     const parsed = Number.parseInt(topN, 10);
     const limit = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+    const text = textCol.trim();
     try {
-      await invoke("launch_sidecar", { dataset: selected, limit });
+      await invoke("launch_sidecar", { dataset: selected, limit, text });
     } catch (e) {
       status = { kind: "error", message: String(e) };
     }
@@ -113,7 +115,7 @@
 <main>
   <header>
     <h1>Geospatial Atlas</h1>
-    <p class="tagline">Native macOS viewer for geospatial &amp; embedding data</p>
+    <p class="tagline">WebGPU-enabled MacOS viewer for geospatial &amp; embedding data</p>
   </header>
 
   <div class="gpu-row">
@@ -141,6 +143,16 @@
           bind:value={topN}
         />
       </div>
+      <div class="topn-row">
+        <label class="topn-label" for="text-col">Text column (optional)</label>
+        <input
+          id="text-col"
+          class="topn-input topn-input--wide"
+          type="text"
+          placeholder="e.g. name, description"
+          bind:value={textCol}
+        />
+      </div>
       <button onclick={pickDataset}>Open dataset…</button>
       <p class="hint">
         Choose a Parquet, GeoParquet, CSV, or Arrow file containing
@@ -148,6 +160,9 @@
         <br />
         Set a <em>row limit</em> for a quick glimpse of a large file —
         DuckDB reads only the first&nbsp;N rows (SQL&nbsp;<code>LIMIT</code>).
+        <br />
+        Set a <em>text column</em> (mirrors <code>--text</code>) to pick
+        which column feeds tooltips and search.
         <br />
         You can also drag &amp; drop a file anywhere on the window.
         The view state is saved per dataset and restored on next open.
@@ -378,6 +393,10 @@
     color: inherit;
     font: inherit;
     text-align: right;
+  }
+  .topn-input--wide {
+    width: 220px;
+    text-align: left;
   }
   .topn-input::placeholder {
     color: #565d6a;

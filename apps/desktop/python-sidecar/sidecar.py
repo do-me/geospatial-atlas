@@ -159,7 +159,11 @@ def _emit_progress(stage: str, percent: float, detail: str) -> None:
     print(progress_line(stage, percent, detail), flush=True)
 
 
-def _fast_load(dataset_path: str, limit: Optional[int] = None):
+def _fast_load(
+    dataset_path: str,
+    limit: Optional[int] = None,
+    text_column: Optional[str] = None,
+):
     """DuckDB-native fast path. Returns (connection, DataSource, props, is_gis)."""
     from embedding_atlas.cache import sha256_hexdigest
     from embedding_atlas.data_source import DataSource
@@ -170,9 +174,13 @@ def _fast_load(dataset_path: str, limit: Optional[int] = None):
     result = fast_load_parquet(dataset_path, progress=_emit_progress, limit=limit)
 
     # Add an __row_index__ column to the DuckDB table (used by the viewer).
+    # Note: PRAGMA table_info rows are (cid, name, type, notnull, dflt, pk) —
+    # the column NAME is r[1], not r[0].
     con = result.connection
     id_col = "__row_index__"
-    existing_cols = [r[0] for r in con.sql(f'PRAGMA table_info("{result.table}")').fetchall()]
+    existing_cols: list[str] = [
+        r[1] for r in con.sql(f'PRAGMA table_info("{result.table}")').fetchall()
+    ]
     i = 1
     while id_col in existing_cols:
         id_col = f"__row_index___{i}"
@@ -186,12 +194,27 @@ def _fast_load(dataset_path: str, limit: Optional[int] = None):
     con.sql("SET enable_external_access = false")
     con.sql("SET lock_configuration = true")
 
+    # Validate the text column (if provided). Warn but don't fail if the
+    # user typed a name that doesn't exist.
+    resolved_text: Optional[str] = None
+    if text_column:
+        cols_lower = {c.lower(): c for c in existing_cols}
+        if text_column in existing_cols:
+            resolved_text = text_column
+        elif text_column.lower() in cols_lower:
+            resolved_text = cols_lower[text_column.lower()]
+        else:
+            _log(
+                f"text column {text_column!r} not found in dataset "
+                f"(available: {', '.join(existing_cols)}); ignoring"
+            )
+
     props = make_embedding_atlas_props(
         row_id=id_col,
         x=result.x_column,
         y=result.y_column,
         neighbors=None,
-        text=None,
+        text=resolved_text,
         point_size=None,
         stop_words=None,
         labels=None,
@@ -204,7 +227,7 @@ def _fast_load(dataset_path: str, limit: Optional[int] = None):
     data_source = DataSource(identifier, None, metadata)
     _log(
         f"fast load done: {result.row_count:,} rows in {result.duration_seconds:.2f}s "
-        f"(x={result.x_column}, y={result.y_column})"
+        f"(x={result.x_column}, y={result.y_column}, text={resolved_text})"
     )
     return con, data_source, metadata, True
 
@@ -253,8 +276,14 @@ def main() -> int:
                 limit = n
         except ValueError:
             _log(f"invalid limit argv[2]={sys.argv[2]!r}, ignoring")
-    _log(f"using row limit: {limit if limit else 'none'}")
-    connection, data_source, _meta, _is_gis = _fast_load(dataset_path, limit=limit)
+    # argv[3] is the optional text column name (empty string = none).
+    text_column: Optional[str] = None
+    if len(sys.argv) >= 4 and sys.argv[3].strip():
+        text_column = sys.argv[3].strip()
+    _log(f"using row limit: {limit if limit else 'none'}; text column: {text_column!r}")
+    connection, data_source, _meta, _is_gis = _fast_load(
+        dataset_path, limit=limit, text_column=text_column
+    )
     static_path = _resolve_static_dir()
     _log(f"static dir: {static_path}")
 

@@ -13,6 +13,9 @@
 
     selectionMode: "marquee" | "lasso" | "none";
     onSelectionMode: (v: "marquee" | "lasso" | "none") => void;
+
+    /** Optional basemap attribution shown after the branding link, same font. */
+    basemapAttribution?: string | null;
   }
 
   let {
@@ -22,6 +25,7 @@
     distancePerPoint,
     selectionMode,
     onSelectionMode,
+    basemapAttribution = null,
   }: Props = $props();
 </script>
 
@@ -76,6 +80,11 @@
       >
         {resolvedTheme.brandingLink.text}
       </a>
+      {#if basemapAttribution}
+        <span style:opacity="0.7" style:padding="0 4px" aria-label="Basemap attribution">
+          | {basemapAttribution}
+        </span>
+      {/if}
       <div style="border-right: 1px solid currentColor; margin: 4px 2px; opacity: 0.3; width: 0; height: 10px"></div>
     {/if}
     <Button

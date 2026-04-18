@@ -1,0 +1,215 @@
+name: app release (desktop)
+
+# Builds the native desktop app (Tauri 2 shell + PyInstaller sidecar) for
+# macOS (arm64 + x86_64), Linux (x86_64 .deb + .AppImage + .rpm),
+# and Windows (x86_64 .msi + .exe NSIS installer).
+#
+# Trigger manually via the Actions tab or by pushing a tag shaped like
+# `app-v0.0.1`. On tag push, the built artifacts are attached to a draft
+# GitHub Release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Attach built artifacts to a draft release"
+        required: false
+        default: "false"
+  push:
+    tags:
+      - "app-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.os }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos
+            arch: arm64
+            target: aarch64-apple-darwin
+            runner: macos-14
+          - os: macos
+            arch: x64
+            target: x86_64-apple-darwin
+            runner: macos-13
+          - os: linux
+            arch: x64
+            target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - os: windows
+            arch: x64
+            target: x86_64-pc-windows-msvc
+            runner: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+          shared-key: ${{ matrix.target }}
+
+      # Linux: WebKitGTK + GTK for the Tauri webview, plus appindicator for tray support.
+      - name: Install Linux system deps
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install npm workspaces (root → component, viewer, backend, …)
+        run: npm ci
+
+      - name: Sync backend Python env
+        working-directory: packages/backend
+        run: uv sync --frozen
+
+      - name: Build viewer + backend static bundle
+        if: matrix.os != 'windows'
+        working-directory: packages/backend
+        run: ./build.sh
+
+      - name: Build viewer + backend static bundle (Windows)
+        if: matrix.os == 'windows'
+        working-directory: packages/backend
+        shell: pwsh
+        run: |
+          Push-Location ..\component
+          npm run build
+          Pop-Location
+          Push-Location ..\viewer
+          npm run build
+          Pop-Location
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue `
+            embedding_atlas\static, embedding_atlas\widget_static
+          Copy-Item -Recurse ..\viewer\dist embedding_atlas\static
+          npm run build
+          uv build --wheel
+
+      - name: Install apps/desktop npm deps
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Generate icons (macOS + Linux)
+        if: matrix.os != 'windows'
+        working-directory: apps/desktop
+        run: |
+          if [ ! -f src-tauri/icons/icon.ico ]; then
+            uv --project ../packages/backend run --with Pillow \
+              python src-tauri/icons/make_icons.py
+          fi
+
+      - name: Generate icons (Windows)
+        if: matrix.os == 'windows'
+        working-directory: apps/desktop
+        shell: pwsh
+        run: |
+          if (-not (Test-Path src-tauri\icons\icon.ico)) {
+            uv --project ..\packages\backend run --with Pillow python src-tauri\icons\make_icons.py
+          }
+
+      - name: Build PyInstaller sidecar
+        working-directory: apps/desktop
+        run: node python-sidecar/build.js
+
+      - name: Build Tauri app
+        working-directory: apps/desktop
+        env:
+          # macOS signing + notarization (optional — missing secrets = unsigned build).
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows code signing (optional).
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          CARGO_INCREMENTAL: "0"
+        run: npx tauri build --target ${{ matrix.target }}
+
+      - name: Collect artifacts
+        id: collect
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          mkdir -p ../dist-artifacts
+          case "${{ matrix.os }}" in
+            macos)
+              cp src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg ../dist-artifacts/ 2>/dev/null || true
+              ;;
+            linux)
+              cp src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb ../dist-artifacts/ 2>/dev/null || true
+              cp src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage ../dist-artifacts/ 2>/dev/null || true
+              cp src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm ../dist-artifacts/ 2>/dev/null || true
+              ;;
+            windows)
+              cp src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi ../dist-artifacts/ 2>/dev/null || true
+              cp src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe ../dist-artifacts/ 2>/dev/null || true
+              ;;
+          esac
+          ls -la ../dist-artifacts/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: geospatial-atlas-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist-artifacts/*
+          if-no-files-found: error
+
+  release:
+    name: draft release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/app-v') || github.event.inputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: geospatial-atlas-*
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: ls -la dist
+
+      - name: Attach artifacts to draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/*.dmg
+            dist/*.deb
+            dist/*.AppImage
+            dist/*.rpm
+            dist/*.msi
+            dist/*.exe
+          fail_on_unmatched_files: false

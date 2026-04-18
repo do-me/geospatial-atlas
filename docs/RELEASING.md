@@ -1,0 +1,180 @@
+# Releasing geospatial-atlas
+
+Three independent release streams, each with its own tag prefix so the
+desktop app, the Python package, and the static web viewer can evolve on
+their own cadences.
+
+| Stream | Tag prefix | Distro | Workflow |
+|---|---|---|---|
+| Desktop app | `app-v*` | `.dmg` / `.AppImage` / `.deb` / `.msi` / `.exe` | `.github/workflows/app-release.yml` |
+| Python package | `py-v*` | PyPI wheel (`geospatial-atlas`) | (add later — see *Python release* below) |
+| Static web viewer | `web-v*` | GitHub Pages | `.github/workflows/deploy-gh-pages.sh` (manual for now) |
+
+Mobile is documented in [MOBILE.md](./MOBILE.md) and not shipped yet.
+
+---
+
+## Cutting the very first release — **v0.0.1**
+
+The desktop app is the one you want to ship today. Minimal path:
+
+```bash
+# 1. Bump the version in three places (all read during CI build)
+#    - apps/desktop/src-tauri/Cargo.toml           [package] version
+#    - apps/desktop/src-tauri/tauri.conf.json      "version"
+#    - apps/desktop/package.json                   "version"
+#
+#    (A helper script would be nice later. Today: three greps + edits.)
+#
+# 2. Update CHANGELOG.md with the highlights.
+#
+# 3. Commit the version bump.
+git commit -am "app-v0.0.1: first release"
+
+# 4. Tag and push.
+git tag app-v0.0.1
+git push origin main app-v0.0.1
+```
+
+Pushing the `app-v0.0.1` tag triggers
+`.github/workflows/app-release.yml`, which:
+
+1. Spawns four matrix builds: **macOS arm64**, **macOS x64**, **Linux x64**,
+   **Windows x64**.
+2. Builds the viewer → backend static → PyInstaller sidecar → Tauri app
+   for each.
+3. Uploads `.dmg`, `.AppImage`, `.deb`, `.msi`, and `.exe` artifacts.
+4. Creates a **draft** GitHub Release with the tag as name and all
+   artifacts attached.
+5. You review the draft on github.com, write release notes (or let the
+   auto-generated ones stand), and click **Publish**.
+
+### v0.0.1 quickstart (no signing yet)
+
+For the very first release you can ship **unsigned** builds. Expect
+these user-facing caveats:
+
+- **macOS**: First-launch warning: right-click → Open. Or after Sequoia
+  (15.1+): System Settings → Privacy & Security → "Open Anyway".
+- **Windows**: SmartScreen will show "Windows protected your PC — Don't
+  run". Users click *More info → Run anyway*. This goes away once you
+  have an EV code-signing cert.
+- **Linux**: No prompt. `.AppImage` should be `chmod +x`'d before run.
+
+This is fine for a v0.0.x / pre-1.0 release where early users tolerate
+friction. Add signing before v0.1.
+
+---
+
+## Semver
+
+We follow **semver** for each stream independently:
+
+- `0.0.x`: unstable, breakage expected every version.
+- `0.y.0`: usable but API may shift; document breakage in changelog.
+- `1.0.0`: commit to backwards compatibility for the public API
+  (CLI flags, backend HTTP schema, exported viewer's `metadata.json`).
+
+Desktop app version must match the Python package version **after 1.0** so
+`embedding-atlas==X.Y.Z` speaks to `Geospatial Atlas vX.Y.Z`. Before 1.0 they
+can drift (desktop is `app-v0.0.1`, Python is `0.20.0`).
+
+---
+
+## Signing & notarization — unlocking v0.1
+
+When you outgrow the unsigned warnings:
+
+### macOS
+
+1. Join the [Apple Developer Program](https://developer.apple.com/programs/)
+   ($99/year).
+2. Generate a **Developer ID Application** certificate in Xcode or the
+   Apple Developer portal.
+3. Export the `.p12`, base64-encode it:
+   ```bash
+   base64 -i cert.p12 -o cert.b64
+   ```
+4. Add these to repo **Settings → Secrets and variables → Actions**:
+   - `APPLE_SIGNING_IDENTITY` = `"Developer ID Application: Your Name (TEAMID)"`
+   - `APPLE_CERTIFICATE` = contents of `cert.b64`
+   - `APPLE_CERTIFICATE_PASSWORD`
+   - `APPLE_ID`
+   - `APPLE_APP_SPECIFIC_PASSWORD` (from appleid.apple.com)
+   - `APPLE_TEAM_ID`
+
+The CI already reads these env vars and skips signing if any are absent.
+
+### Windows
+
+EV code-signing certs cost $200–400/year. Then:
+- `WINDOWS_CERTIFICATE` = base64 of `.pfx`
+- `WINDOWS_CERTIFICATE_PASSWORD`
+
+### Linux
+
+Linux doesn't have a Gatekeeper-equivalent. Just sign `.deb` / `.rpm` with
+`dpkg-sig` / `rpm --addsign` if you want repository integration.
+
+---
+
+## Changelog
+
+Keep a top-level `CHANGELOG.md`. Prepend on each release:
+
+```md
+## app-v0.0.1 — 2026-04-17
+
+**First desktop release.**
+
+### Added
+- Native macOS / Linux / Windows app (Tauri 2 + PyInstaller sidecar).
+- Fast path for GeoParquet files via DuckDB spatial (`ST_X`/`ST_Y`).
+- Live progress bar during load (DuckDB `query_progress()`).
+- Per-dataset URL-hash persistence.
+- Drag-and-drop dataset loading.
+- Row-limit input for sampling large files.
+
+### Known issues
+- Unsigned: first-launch warnings on macOS + Windows.
+- iOS / Android not yet shipped — see docs/MOBILE.md.
+```
+
+---
+
+## Python release (not yet wired up)
+
+For when you want to release the `embedding-atlas` wheel to PyPI:
+
+```bash
+# Bump packages/backend/pyproject.toml version.
+git tag py-v0.20.1
+git push origin py-v0.20.1
+```
+
+A future `py-release.yml` workflow would:
+- `uv build --wheel --sdist` in `packages/backend/`.
+- Publish via `twine` using `PYPI_TOKEN` secret.
+
+---
+
+## Web (static viewer) release
+
+The static viewer currently deploys via the existing
+`scripts/deploy-gh-pages.sh`. For now that's run manually. Tag format
+`web-v*` is reserved for a future automated workflow.
+
+---
+
+## Post-release verification
+
+After a release publishes:
+
+1. Download the `.dmg` / `.deb` / `.msi` from the GitHub Release.
+2. Install on a clean VM (or at least `rm -rf ~/Library/Application\ Support/io.github.do-me.geospatial-atlas`).
+3. Open a Parquet file with `lon`/`lat`.
+4. Confirm: WebGPU probe passes, load progresses, view restores on relaunch.
+
+If the release is broken, **delete the GitHub Release + the tag**
+(`git tag -d app-v0.0.1 && git push --delete origin app-v0.0.1`), fix,
+re-tag.

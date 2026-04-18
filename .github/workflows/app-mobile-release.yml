@@ -1,0 +1,74 @@
+name: app release (mobile)
+
+# NOT YET ENABLED. See docs/MOBILE.md for the architecture decision
+# (mobile must go WASM-only; the PyInstaller sidecar doesn't run on iOS
+# or Android). This workflow is a scaffold — uncomment + flesh out once
+# Tauri Mobile is initialised in src-tauri/ and signing secrets are set.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          cat <<'EOF'
+          Mobile builds are not wired up yet.
+          See docs/MOBILE.md for the plan.
+
+          TODO to enable:
+            1. cd apps/desktop/src-tauri && cargo tauri ios init && cargo tauri android init
+            2. Add a conditional in src/App.svelte that skips the sidecar flow
+               when window.__TAURI_INTERNALS__.metadata.platform is 'ios' or 'android',
+               navigating straight to the FileViewer route.
+            3. Replace this job with matrix builds for ios-latest / ubuntu + android.
+            4. Configure signing secrets in repo settings:
+                 - iOS: APPLE_ID, APPLE_TEAM_ID, APPLE_APP_SPECIFIC_PASSWORD, provisioning profile.
+                 - Android: ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS.
+          EOF
+          exit 0
+
+  # -- iOS (commented out until mobile init is done) -----------------------
+  # ios:
+  #   runs-on: macos-14
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-node@v4
+  #       with: { node-version: "20" }
+  #     - uses: dtolnay/rust-toolchain@stable
+  #       with: { targets: aarch64-apple-ios,x86_64-apple-ios }
+  #     - name: Install Tauri CLI
+  #       run: cargo install tauri-cli --version "^2.0"
+  #     - run: npm ci
+  #     - name: Build viewer (no backend sidecar on mobile)
+  #       working-directory: packages/viewer
+  #       run: npm install && npm run build
+  #     - name: Tauri iOS build
+  #       working-directory: apps/desktop
+  #       env:
+  #         APPLE_ID: ${{ secrets.APPLE_ID }}
+  #         APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+  #         APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+  #       run: cargo tauri ios build --export-method app-store-connect
+
+  # -- Android (commented out) --------------------------------------------
+  # android:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-node@v4
+  #       with: { node-version: "20" }
+  #     - uses: dtolnay/rust-toolchain@stable
+  #       with: { targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android }
+  #     - uses: actions/setup-java@v4
+  #       with: { distribution: temurin, java-version: "17" }
+  #     - uses: android-actions/setup-android@v3
+  #     - run: npm ci && npm --prefix packages/viewer install && npm --prefix packages/viewer run build
+  #     - name: Tauri Android build
+  #       working-directory: apps/desktop
+  #       env:
+  #         ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+  #         ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+  #         ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+  #       run: cargo tauri android build --apk --aab

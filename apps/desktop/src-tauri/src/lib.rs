@@ -8,11 +8,11 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::async_runtime;
 use tauri::{AppHandle, DragDropEvent, Emitter, Manager, RunEvent, State, Url, WindowEvent};
-use tauri_plugin_shell::process::{CommandChild, CommandEvent};
-use tauri_plugin_shell::ShellExt;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Child;
 
 struct RunningSidecar {
-    child: CommandChild,
+    child: Child,
     /// Set to ``true`` by kill paths (return_home, replace-on-drop, app
     /// exit). The stdout recv task checks this before emitting a
     /// "sidecar exited" error, so intentional kills stay silent.
@@ -55,12 +55,46 @@ struct SidecarProgress {
 
 // ---------- sidecar launch ----------
 
+fn sidecar_binary_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("resource dir: {e}"))?;
+    let bin_name = if cfg!(windows) {
+        "geospatial-atlas-sidecar.exe"
+    } else {
+        "geospatial-atlas-sidecar"
+    };
+    let p = resource_dir.join("sidecar").join(bin_name);
+    if !p.is_file() {
+        return Err(format!(
+            "sidecar binary not found at {} — did you run the python-sidecar build?",
+            p.display()
+        ));
+    }
+    Ok(p)
+}
+
+fn handle_line(app: &AppHandle, line: String) {
+    if line.is_empty() {
+        return;
+    }
+    if let Some(rest) = line.strip_prefix("GSA_PROGRESS ") {
+        if let Ok(p) = serde_json::from_str::<SidecarProgress>(rest) {
+            let _ = app.emit("sidecar-progress", p);
+            return;
+        }
+    }
+    let _ = app.emit("sidecar-log", SidecarLog { line });
+}
+
 #[tauri::command]
 async fn launch_sidecar(
     app: AppHandle,
     state: State<'_, SidecarState>,
     dataset: String,
     limit: u64,
+    text: String,
 ) -> Result<(), String> {
     kill_existing(&state);
     {
@@ -72,23 +106,36 @@ async fn launch_sidecar(
     let host = "127.0.0.1";
     let url = format!("http://{host}:{port}");
 
-    // argv: [dataset, limit] — limit=0 means "no limit". Simple and
-    // impossible to lose to serde/env-var mishandling.
+    let sidecar_path = sidecar_binary_path(&app)?;
     let limit_str = limit.to_string();
-    let args: Vec<&str> = vec![&dataset, &limit_str];
+    // argv[3] = text column name ("" means none).
+    let text_arg = text.clone();
 
-    let sidecar = app
-        .shell()
-        .sidecar("geospatial-atlas-sidecar")
-        .map_err(|e| format!("sidecar lookup failed: {e}"))?
-        .args(&args)
+    let mut cmd = tokio::process::Command::new(&sidecar_path);
+    cmd.arg(&dataset)
+        .arg(&limit_str)
+        .arg(&text_arg)
         .env("GEOSPATIAL_ATLAS_HOST", host)
         .env("GEOSPATIAL_ATLAS_PORT", port.to_string())
-        .env("GEOSPATIAL_ATLAS_PARENT_PID", std::process::id().to_string());
+        .env("GEOSPATIAL_ATLAS_PARENT_PID", std::process::id().to_string())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
 
-    let (mut rx, child) = sidecar
+    // Windows: hide the console window that would otherwise flash up.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = cmd
         .spawn()
-        .map_err(|e| format!("failed to spawn sidecar: {e}"))?;
+        .map_err(|e| format!("failed to spawn sidecar at {}: {e}", sidecar_path.display()))?;
+    let stdout = child.stdout.take().expect("stdout piped");
+    let stderr = child.stderr.take().expect("stderr piped");
 
     let intentional_kill = Arc::new(AtomicBool::new(false));
     {
@@ -100,38 +147,30 @@ async fn launch_sidecar(
     }
 
     let app_for_logs = app.clone();
-    let url_for_poll = url.clone();
     let intentional_for_logs = intentional_kill.clone();
+    let url_for_poll = url.clone();
     async_runtime::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            match event {
-                CommandEvent::Stdout(bytes) | CommandEvent::Stderr(bytes) => {
-                    let line = String::from_utf8_lossy(&bytes).trim_end().to_string();
-                    if line.is_empty() {
-                        continue;
-                    }
-                    if let Some(rest) = line.strip_prefix("GSA_PROGRESS ") {
-                        if let Ok(p) = serde_json::from_str::<SidecarProgress>(rest) {
-                            let _ = app_for_logs.emit("sidecar-progress", p);
-                            continue;
-                        }
-                    }
-                    let _ = app_for_logs.emit("sidecar-log", SidecarLog { line });
-                }
-                CommandEvent::Terminated(payload) => {
-                    if !intentional_for_logs.load(Ordering::SeqCst) {
-                        let code = payload.code.unwrap_or(-1);
-                        let _ = app_for_logs.emit(
-                            "sidecar-error",
-                            SidecarError {
-                                message: format!("sidecar exited with code {code}"),
-                            },
-                        );
-                    }
-                    break;
-                }
-                _ => {}
+        let mut stdout = BufReader::new(stdout).lines();
+        let mut stderr = BufReader::new(stderr).lines();
+        loop {
+            tokio::select! {
+                line = stdout.next_line() => match line {
+                    Ok(Some(line)) => handle_line(&app_for_logs, line),
+                    Ok(None) | Err(_) => break,
+                },
+                line = stderr.next_line() => match line {
+                    Ok(Some(line)) => handle_line(&app_for_logs, line),
+                    Ok(None) | Err(_) => break,
+                },
             }
+        }
+        if !intentional_for_logs.load(Ordering::SeqCst) {
+            let _ = app_for_logs.emit(
+                "sidecar-error",
+                SidecarError {
+                    message: "sidecar exited unexpectedly".to_string(),
+                },
+            );
         }
     });
 
@@ -186,9 +225,9 @@ fn take_running(state: &SidecarState) -> Option<RunningSidecar> {
 /// Mark the sidecar as intentionally stopped and kill it. Safe to call
 /// when nothing is running — in that case it's a no-op.
 fn stop_running(state: &SidecarState) {
-    if let Some(rs) = take_running(state) {
+    if let Some(mut rs) = take_running(state) {
         rs.intentional_kill.store(true, Ordering::SeqCst);
-        let _ = rs.child.kill();
+        let _ = rs.child.start_kill();
     }
 }
 
@@ -252,7 +291,7 @@ fn handle_dropped_files(app: &AppHandle, paths: Vec<PathBuf>) {
     let handle = app.clone();
     async_runtime::spawn(async move {
         let state = handle.state::<SidecarState>();
-        if let Err(e) = launch_sidecar(handle.clone(), state, dataset, 0).await {
+        if let Err(e) = launch_sidecar(handle.clone(), state, dataset, 0, String::new()).await {
             let _ = handle.emit("sidecar-error", SidecarError { message: e });
         }
     });
@@ -511,7 +550,7 @@ pub fn run() {
                 let handle = app.handle().clone();
                 async_runtime::spawn(async move {
                     let state = handle.state::<SidecarState>();
-                    if let Err(e) = launch_sidecar(handle.clone(), state, dataset, 0).await {
+                    if let Err(e) = launch_sidecar(handle.clone(), state, dataset, 0, String::new()).await {
                         let _ = handle.emit("sidecar-error", SidecarError { message: e });
                     }
                 });

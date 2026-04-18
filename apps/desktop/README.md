@@ -45,14 +45,14 @@ Lifecycle:
 ## Build from source
 
 ```bash
-cd app-mac
+cd apps/desktop
 
 # 1. Install JS deps
 npm install
 
 # 2. Build the Svelte viewer for the backend (required — provides
 #    embedding_atlas/static bundled into the sidecar)
-cd ../packages/backend && ./build.sh && cd ../../app-mac
+cd ../packages/backend && ./build.sh && cd ../../apps/desktop
 
 # 3. Build the PyInstaller sidecar for the host arch
 npm run build:sidecar

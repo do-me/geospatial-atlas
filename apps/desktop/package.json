@@ -1,14 +1,14 @@
 {
   "name": "geospatial-atlas-mac",
   "private": true,
-  "version": "0.20.0",
+  "version": "0.0.1",
   "type": "module",
   "scripts": {
     "dev:ui": "vite",
     "build:ui": "vite build",
-    "build:sidecar": "bash python-sidecar/build.sh",
-    "build:sidecar:arm64": "TARGET_TRIPLE=aarch64-apple-darwin bash python-sidecar/build.sh",
-    "build:sidecar:x86_64": "TARGET_TRIPLE=x86_64-apple-darwin bash python-sidecar/build.sh",
+    "build:sidecar": "node python-sidecar/build.js",
+    "build:sidecar:sh": "bash python-sidecar/build.sh",
+    "build:sidecar:ps1": "powershell -ExecutionPolicy Bypass -File python-sidecar/build.ps1",
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build"
