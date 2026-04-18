@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build the PyInstaller --onedir sidecar for the Tauri desktop app (macOS + Linux).
+# Build the PyInstaller --onedir sidecar for the Tauri desktop app
+# (macOS + Linux + Windows-via-git-bash).
 #
 # Produces:
 #   python-sidecar/dist/geospatial-atlas-sidecar/      (onedir PyInstaller output)
@@ -47,10 +48,16 @@ echo "[build-sidecar] running pyinstaller…"
 )
 
 ONEDIR="$DIST_DIR/geospatial-atlas-sidecar"
-INNER_BIN="$ONEDIR/geospatial-atlas-sidecar"
+# PyInstaller emits .exe on Windows (detected via MSYSTEM which git-bash sets).
+if [ -n "${MSYSTEM:-}" ] || [ "$(uname -s | cut -c1-5)" = "MINGW" ] || [ "$(uname -s | cut -c1-4)" = "MSYS" ]; then
+  INNER_BIN="$ONEDIR/geospatial-atlas-sidecar.exe"
+else
+  INNER_BIN="$ONEDIR/geospatial-atlas-sidecar"
+fi
 
 if [ ! -x "$INNER_BIN" ]; then
   echo "[build-sidecar] ERROR: expected binary at $INNER_BIN" >&2
+  ls -la "$ONEDIR/" >&2 || true
   exit 1
 fi
 

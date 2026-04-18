@@ -1,15 +1,12 @@
 #!/usr/bin/env node
-// Cross-platform dispatcher that runs build.sh on Unix and build.ps1 on Windows.
+// Cross-platform dispatcher that always runs build.sh via bash.
+// On Windows it uses git-bash (preinstalled on GitHub's windows-latest
+// runners and on most dev machines via Git for Windows). build.sh is
+// POSIX-only; the Windows PowerShell port used to live here but its
+// backtick line-continuations were too fragile.
 const { spawnSync } = require("node:child_process");
 const path = require("node:path");
 
-const here = __dirname;
-const isWindows = process.platform === "win32";
-
-const cmd = isWindows ? "powershell" : "bash";
-const args = isWindows
-  ? ["-ExecutionPolicy", "Bypass", "-File", path.join(here, "build.ps1")]
-  : [path.join(here, "build.sh")];
-
-const res = spawnSync(cmd, args, { stdio: "inherit" });
+const script = path.join(__dirname, "build.sh");
+const res = spawnSync("bash", [script], { stdio: "inherit" });
 process.exit(res.status ?? 1);

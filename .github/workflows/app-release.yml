@@ -185,11 +185,15 @@ jobs:
           esac
           ls -la ../dist-artifacts/
 
+      # upload-artifact@v4 doesn't reliably resolve 'dist-artifacts' or
+      # 'dist-artifacts/*' as a bare path on some runners (issue observed
+      # with filenames containing spaces). Explicit ** recursive glob
+      # under the absolute workspace path is bulletproof.
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: geospatial-atlas-${{ matrix.os }}-${{ matrix.arch }}
-          path: dist-artifacts
+          path: ${{ github.workspace }}/dist-artifacts/**
           if-no-files-found: error
 
   release:
