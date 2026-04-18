@@ -1,12 +1,12 @@
 {
-  "name": "geospatial-atlas-mac",
+  "name": "geospatial-atlas-desktop",
   "private": true,
   "version": "0.0.1",
   "type": "module",
   "scripts": {
     "dev:ui": "vite",
     "build:ui": "vite build",
-    "build:sidecar": "node python-sidecar/build.js",
+    "build:sidecar": "node python-sidecar/build.cjs",
     "build:sidecar:sh": "bash python-sidecar/build.sh",
     "build:sidecar:ps1": "powershell -ExecutionPolicy Bypass -File python-sidecar/build.ps1",
     "tauri": "tauri",

@@ -4,24 +4,31 @@ set -e
 
 rm -rf dist/
 
-# @embedding-atlas/component transitively imports the pre-built WASM
-# from @embedding-atlas/density-clustering, which is .gitignored.
-# Build it first so a fresh checkout works end-to-end.
+# Build every workspace the viewer (and therefore the backend static
+# bundle) transitively depends on. Each of these ships gitignored
+# artifacts (WASM pkg/, tsc dist/, vite dist/) that a fresh clone
+# doesn't have. Order matters — each step depends on the previous.
 echo "Building @embedding-atlas/density-clustering (WASM)..."
 pushd ../density-clustering
 npm run build
 popd
 
-# The viewer imports pre-built artifacts from @embedding-atlas/component
-# (packages/component/dist + /svelte). Rebuild them next so source
-# changes to the component package actually land in the viewer bundle.
-echo "Building @embedding-atlas/component..."
+echo "Building @embedding-atlas/umap-wasm (WASM)..."
+pushd ../umap/umap-wasm
+npm run build
+popd
+
+echo "Building @embedding-atlas/utils (tsc)..."
+pushd ../utils
+npm run build
+popd
+
+echo "Building @embedding-atlas/component (vite)..."
 pushd ../component
 npm run build
 popd
 
 echo "Building viewer frontend..."
-
 pushd ../viewer
 npm run build
 popd
