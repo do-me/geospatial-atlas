@@ -94,6 +94,28 @@ jobs:
       - name: Install npm workspaces (root → component, viewer, backend, …)
         run: npm install --no-audit --no-fund
 
+      # Workaround for https://github.com/npm/cli/issues/4828: npm's
+      # workspace install doesn't reliably install platform-specific
+      # optional deps (rolldown/lightningcss native bindings). Force-
+      # install the matching ones so viewer/component builds can
+      # require them at runtime.
+      - name: Install platform-specific native bindings
+        shell: bash
+        run: |
+          case "${{ matrix.os }}-${{ matrix.arch }}" in
+            macos-arm64)
+              PKGS="@rolldown/binding-darwin-arm64 lightningcss-darwin-arm64" ;;
+            macos-x64)
+              PKGS="@rolldown/binding-darwin-x64 lightningcss-darwin-x64" ;;
+            linux-x64)
+              PKGS="@rolldown/binding-linux-x64-gnu lightningcss-linux-x64-gnu" ;;
+            windows-x64)
+              PKGS="@rolldown/binding-win32-x64-msvc lightningcss-win32-x64-msvc" ;;
+          esac
+          if [ -n "$PKGS" ]; then
+            npm install --no-save --no-audit --no-fund $PKGS
+          fi
+
       - name: Sync backend Python env
         working-directory: packages/backend
         run: uv sync --frozen
