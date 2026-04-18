@@ -53,7 +53,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -83,8 +83,11 @@ jobs:
             librsvg2-dev \
             patchelf
 
+      # The root lockfile has @rolldown/binding-* per-platform optional
+      # deps that npm ci enforces strictly. Use npm install so each
+      # runner picks up its own native binding.
       - name: Install npm workspaces (root → component, viewer, backend, …)
-        run: npm ci
+        run: npm install --no-audit --no-fund
 
       - name: Sync backend Python env
         working-directory: packages/backend
@@ -114,7 +117,7 @@ jobs:
 
       - name: Install apps/desktop npm deps
         working-directory: apps/desktop
-        run: npm ci
+        run: npm install --no-audit --no-fund
 
       - name: Generate icons (macOS + Linux)
         if: matrix.os != 'windows'
