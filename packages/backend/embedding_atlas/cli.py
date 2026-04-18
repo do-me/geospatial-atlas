@@ -346,7 +346,8 @@ def _run_fast_path(
 
     con = fast_connection.connection
     # Ensure the viewer has an id column.
-    cols = [r[0] for r in con.sql(f'PRAGMA table_info("{fast_connection.table}")').fetchall()]
+    # PRAGMA table_info rows are (cid, name, type, ...) — r[1] is the column name.
+    cols = [r[1] for r in con.sql(f'PRAGMA table_info("{fast_connection.table}")').fetchall()]
     id_col = "__row_index__"
     i = 1
     while id_col in cols:

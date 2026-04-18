@@ -288,34 +288,46 @@ class WebSocketHandler:
 
 
 def make_mcp_proxy(app: FastAPI):
-    # Registry to track the last connected WebSocket handler
+    """Expose the viewer's MCP tools via the standard Streamable HTTP transport.
+
+    Adds three routes:
+      * ``GET/POST/DELETE /mcp`` — Streamable HTTP endpoint, the format
+        Claude Desktop and every other MCP client speak natively. No
+        stdio bridge / Node shim required.
+      * ``WS /data/mcp_websocket`` — the viewer JS connects here on load
+        and registers as the tool executor.
+      * ``POST /mcp_legacy`` — the old home-grown "plain POST forward"
+        endpoint, kept for backwards compatibility until downstreams
+        migrate. New integrations should use ``/mcp``.
+    """
+    from .mcp_bridge import MCPBridge
+
     last_handler: dict[str, WebSocketHandler | None] = {"handler": None}
+
+    def get_handler() -> "WebSocketHandler | None":
+        return last_handler["handler"]
 
     @app.websocket("/data/mcp_websocket")
     async def websocket_mcp_ws(websocket: WebSocket):
         await websocket.accept()
-
-        # Create a new handler for this WebSocket connection
         handler = WebSocketHandler(websocket)
         if last_handler["handler"] is not None:
-            # Tell the existing client to close.
             await last_handler["handler"].send_close()
         last_handler["handler"] = handler
-
-        # Handle the connection (this will block until disconnection)
         await handler.handle_connection()
-
-        # Clear the handler if it was the last one
         if last_handler["handler"] == handler:
             last_handler["handler"] = None
 
-    @app.post("/mcp")
-    async def post_mcp(request: Request):
-        # Check if we have a connected WebSocket handler
+    # Standards-compliant MCP endpoint (Streamable HTTP).
+    bridge = MCPBridge(get_handler)
+    bridge.mount(app, path="/mcp")
+
+    # Legacy plain-POST endpoint — will be removed after users migrate.
+    @app.post("/mcp_legacy")
+    async def post_mcp_legacy(request: Request):
         handler = last_handler["handler"]
         if handler is None or not handler.is_connected:
             raise HTTPException(status_code=503, detail="No MCP WebSocket connected")
-
         return await handler.send_request(await request.json())
 
 
