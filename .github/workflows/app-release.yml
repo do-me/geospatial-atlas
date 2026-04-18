@@ -60,15 +60,23 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install Rust toolchain
+      - name: Install Rust toolchain (+ wasm32 for density-clustering)
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.target }}, wasm32-unknown-unknown
+
+      - name: Install wasm-bindgen CLI
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: wasm-bindgen-cli
+          version: "0.2.114"
 
       - name: Cache Cargo build
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: apps/desktop/src-tauri -> target
+          workspaces: |
+            apps/desktop/src-tauri -> target
+            packages/density-clustering -> target
           shared-key: ${{ matrix.target }}
 
       # Linux: WebKitGTK + GTK for the Tauri webview, plus appindicator for tray support.
@@ -83,9 +91,13 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      # The root lockfile has @rolldown/binding-* per-platform optional
-      # deps that npm ci enforces strictly. Use npm install so each
-      # runner picks up its own native binding.
+      # The root lockfile pins @rolldown/binding-darwin-arm64 (generated
+      # on an M-series Mac) as a non-optional dep. Drop it so each CI
+      # runner resolves its own platform-matching native binding.
+      - name: Drop host-locked lockfile
+        shell: bash
+        run: rm -f package-lock.json
+
       - name: Install npm workspaces (root → component, viewer, backend, …)
         run: npm install --no-audit --no-fund
 
@@ -103,6 +115,9 @@ jobs:
         working-directory: packages/backend
         shell: pwsh
         run: |
+          Push-Location ..\density-clustering
+          npm run build
+          Pop-Location
           Push-Location ..\component
           npm run build
           Pop-Location
