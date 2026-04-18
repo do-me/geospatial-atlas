@@ -133,6 +133,12 @@ jobs:
           Push-Location ..\density-clustering
           npm run build
           Pop-Location
+          Push-Location ..\umap\umap-wasm
+          npm run build
+          Pop-Location
+          Push-Location ..\utils
+          npm run build
+          Pop-Location
           Push-Location ..\component
           npm run build
           Pop-Location
@@ -171,19 +177,13 @@ jobs:
         working-directory: apps/desktop
         run: node python-sidecar/build.cjs
 
-      - name: Build Tauri app
+      - name: Build Tauri app (unsigned)
         working-directory: apps/desktop
         env:
-          # macOS signing + notarization (optional — missing secrets = unsigned build).
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Windows code signing (optional).
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          # v0.0.1 ships unsigned. Empty APPLE_CERTIFICATE would otherwise
+          # trigger Tauri's signing path and fail with "security import".
+          # When you enable signing, wire the APPLE_* + WINDOWS_* secrets
+          # back into this env block.
           CARGO_INCREMENTAL: "0"
         run: npx tauri build --target ${{ matrix.target }}
 
