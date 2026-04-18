@@ -207,11 +207,25 @@ class MCPBridge:
                     yield
 
         app.router.lifespan_context = lifespan
-        # StreamableHTTPSessionManager exposes an ASGI callable at
-        # `.handle_request`. Mount it at both /mcp and /mcp/ for
-        # client-friendliness.
-        from starlette.routing import Mount
+        # Mount the Starlette sub-app that wraps the session manager.
         from starlette.applications import Starlette
+        from starlette.routing import Mount
 
-        mcp_app = Starlette(routes=[Mount("/", app=self.session_manager.handle_request)])
-        app.mount(path, mcp_app)
+        mcp_inner = Starlette(
+            routes=[Mount("/", app=self.session_manager.handle_request)]
+        )
+        app.mount(path, mcp_inner)
+
+        # FastAPI returns 405 for the bare /mcp form (no trailing slash)
+        # because the mount only matches descendants. Normalise the
+        # path via HTTP middleware so mcp-remote, Claude Desktop, and
+        # any client that doesn't add the slash works identically.
+        _normalized = path.rstrip("/") + "/"
+        _exact = path.rstrip("/")
+
+        @app.middleware("http")
+        async def _mcp_slash_fix(request, call_next):
+            if request.url.path == _exact:
+                request.scope["path"] = _normalized
+                request.scope["raw_path"] = _normalized.encode()
+            return await call_next(request)
