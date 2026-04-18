@@ -123,58 +123,31 @@ jobs:
         working-directory: packages/backend
         run: uv sync --frozen
 
+      # Unified across platforms — runs in git-bash on Windows. The
+      # npm_config_script_shell override is needed because nested
+      # package.json scripts (density-clustering, umap-wasm) use
+      # 'rm -rf' which is not available in Windows cmd.exe; forcing
+      # bash as npm's script shell keeps one codepath for all four
+      # runners.
       - name: Build viewer + backend static bundle
-        if: matrix.os != 'windows'
         working-directory: packages/backend
+        shell: bash
+        env:
+          npm_config_script_shell: bash
         run: ./build.sh
-
-      - name: Build viewer + backend static bundle (Windows)
-        if: matrix.os == 'windows'
-        working-directory: packages/backend
-        shell: pwsh
-        run: |
-          Push-Location ..\density-clustering
-          npm run build
-          Pop-Location
-          Push-Location ..\umap\umap-wasm
-          npm run build
-          Pop-Location
-          Push-Location ..\utils
-          npm run build
-          Pop-Location
-          Push-Location ..\component
-          npm run build
-          Pop-Location
-          Push-Location ..\viewer
-          npm run build
-          Pop-Location
-          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue `
-            embedding_atlas\static, embedding_atlas\widget_static
-          Copy-Item -Recurse ..\viewer\dist embedding_atlas\static
-          npm run build
-          uv build --wheel
 
       - name: Install apps/desktop npm deps
         working-directory: apps/desktop
         run: npm install --no-audit --no-fund
 
-      - name: Generate icons (macOS + Linux)
-        if: matrix.os != 'windows'
+      - name: Generate icons (if missing)
         working-directory: apps/desktop
+        shell: bash
         run: |
           if [ ! -f src-tauri/icons/icon.ico ]; then
-            uv --project ../packages/backend run --with Pillow \
+            uv --project ../../packages/backend run --with Pillow \
               python src-tauri/icons/make_icons.py
           fi
-
-      - name: Generate icons (Windows)
-        if: matrix.os == 'windows'
-        working-directory: apps/desktop
-        shell: pwsh
-        run: |
-          if (-not (Test-Path src-tauri\icons\icon.ico)) {
-            uv --project ..\packages\backend run --with Pillow python src-tauri\icons\make_icons.py
-          }
 
       - name: Build PyInstaller sidecar
         working-directory: apps/desktop
@@ -216,7 +189,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: geospatial-atlas-${{ matrix.os }}-${{ matrix.arch }}
-          path: dist-artifacts/*
+          path: dist-artifacts
           if-no-files-found: error
 
   release:
