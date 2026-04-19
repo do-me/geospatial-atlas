@@ -9,6 +9,33 @@ You can load the data from a remote URL too! Clicking this link, you download 10
 
 [LinkedIn Post for more context](https://www.linkedin.com/posts/dominik-weckm%C3%BCller_geospatial-atlas-is-born-explore-100m-points-activity-7411826555179429890-CiHX)
 
+## Desktop App Download (v0.0.2)
+
+One-click download of the latest desktop app. All bundles are
+**unsigned**, so every platform needs a one-off bypass step after
+install — shown per-row below.
+
+- **Windows (MSI)** — [geospatial-atlas-windows-x64.msi](https://github.com/do-me/geospatial-atlas/releases/download/app-v0.0.2/geospatial-atlas-windows-x64.msi)
+  Double-click; on the SmartScreen warning click **More info → Run anyway**.
+- **Windows (NSIS setup)** — [geospatial-atlas-windows-x64-setup.exe](https://github.com/do-me/geospatial-atlas/releases/download/app-v0.0.2/geospatial-atlas-windows-x64-setup.exe)
+  Double-click; same **More info → Run anyway** SmartScreen step.
+-  **macOS (Apple Silicon)** — [geospatial-atlas-macos-arm64.dmg](https://github.com/do-me/geospatial-atlas/releases/download/app-v0.0.2/geospatial-atlas-macos-arm64.dmg)
+  Open the dmg, drag to `/Applications`, then strip the Gatekeeper
+  quarantine flag once:
+  ```bash
+  xattr -cr "/Applications/Geospatial Atlas.app"
+  ```
+- 🐧 **Linux (Debian / Ubuntu)** — [geospatial-atlas-linux-x64.deb](https://github.com/do-me/geospatial-atlas/releases/download/app-v0.0.2/geospatial-atlas-linux-x64.deb)
+  ```bash
+  sudo dpkg -i geospatial-atlas-linux-x64.deb
+  ```
+- 🐧 **Linux (Fedora / RHEL)** — [geospatial-atlas-linux-x64.rpm](https://github.com/do-me/geospatial-atlas/releases/download/app-v0.0.2/geospatial-atlas-linux-x64.rpm)
+  ```bash
+  sudo rpm -i geospatial-atlas-linux-x64.rpm
+  ```
+
+More background in [Desktop app releases](#desktop-app-releases) below.
+
 ## Example screenshots
 
 ![alt text](screenshots/image-4.png)
