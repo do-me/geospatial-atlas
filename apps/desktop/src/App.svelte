@@ -50,7 +50,7 @@
       const info: any = (await adapter.requestAdapterInfo?.()) ?? {};
       webgpu = {
         state: "ok",
-        adapter: info.description || info.device || info.vendor || "unknown adapter",
+        adapter: info.description || info.device || info.vendor || "",
       };
     } catch (e) {
       webgpu = { state: "missing", reason: String(e) };
@@ -134,7 +134,7 @@
     {#if webgpu.state === "probing"}
       <span class="gpu probing">Checking GPU…</span>
     {:else if webgpu.state === "ok"}
-      <span class="gpu ok">✓ WebGPU · {webgpu.adapter}</span>
+      <span class="gpu ok">✓ WebGPU{webgpu.adapter ? ` · ${webgpu.adapter}` : ""}</span>
     {:else}
       <span class="gpu warn">⚠ WebGPU unavailable — {webgpu.reason}. Rendering will fall back to WebGL.</span>
     {/if}
