@@ -17,7 +17,8 @@ You can load the data from a remote URL too! Clicking this link, you download 10
 ![alt text](screenshots/image.png)
 ![alt text](screenshots/image-1.png)
 ![alt text](screenshots/image-2.png)
-<img width="3440" height="1307" alt="image" src="https://github.com/user-attachments/assets/daa1d31b-5b46-4c24-96d6-bad56e609d0c" />
+![alt text](screenshots/image-6.png)
+<img alt="image" src="https://github.com/user-attachments/assets/daa1d31b-5b46-4c24-96d6-bad56e609d0c" />
 
 ## Installation
 
@@ -36,9 +37,8 @@ For Windows, Silicon Macs and Linux everything should work out of the box.
 
 ## Usage (after installation above)
 
-Currently the parquet files require both a `lat` (or latitude) and `lon` (or longitude) column. A Geometry column is not being parsed at the moment (but can be implemented fairly easily with DuckDB spatial). Preprocessing with DuckDB is recommended.
+Execute this command directly from the root directory of the repository. The parquet file must either contain a geometry column or lat lon / latitude longitude columns.
 
-Execute this command directly from the root directory of the repository.
 ```bash
 uv --directory packages/backend run geospatial-atlas your_dataset_with_lat_lon_coords.parquet
 ```
@@ -56,8 +56,114 @@ uv run geospatial-atlas your_dataset_with_lat_lon_coords.parquet --text your_nam
 ```
 
 The screenshots above were created with these two datasets:
+- [Overture Maps Places](https://docs.overturemaps.org/guides/places/), download with `uvx overturemaps download -f geoparquet --type=place -o places.parquet`
 - [Foursquare 100M Places](https://huggingface.co/datasets/do-me/foursquare_places_100M), [direct download]()
 - [50k poorly geocoded news](https://huggingface.co/datasets/do-me/50k_poorly_geocoded_news), [direct download](https://huggingface.co/datasets/do-me/50k_poorly_geocoded_news/resolve/main/geocoded_news.parquet)
+
+## Desktop app releases
+
+Pre-built native apps (Tauri 2 shell + bundled Python sidecar) are on
+the [releases page](https://github.com/do-me/geospatial-atlas/releases).
+
+| Platform                       | File                                         |
+|-------------------------------|----------------------------------------------|
+| macOS (Apple Silicon)         | `geospatial-atlas-macos-arm64.dmg`           |
+| Linux x86_64 (Debian/Ubuntu)  | `geospatial-atlas-linux-x64.deb`             |
+| Linux x86_64 (Fedora/RHEL)    | `geospatial-atlas-linux-x64.rpm`             |
+| Windows x86_64 (MSI)          | `geospatial-atlas-windows-x64.msi`           |
+| Windows x86_64 (NSIS setup)   | `geospatial-atlas-windows-x64-setup.exe`     |
+
+Bundles are **unsigned** — Gatekeeper (macOS) and SmartScreen (Windows)
+will warn on first launch. Intel-Mac users aren't served by a
+pre-built bundle due to lack of runners on GitHub (11h waiting time and more); fall back to the CLI path further down.
+
+### macOS: "app is damaged and can't be opened"
+
+That's a misleading Gatekeeper message for unsigned apps downloaded
+from the internet. After dragging **Geospatial Atlas** into
+**Applications**, strip the quarantine attribute once:
+
+```bash
+xattr -cr "/Applications/Geospatial Atlas.app"
+```
+
+Then double-click as usual. (Alternative: **System Settings → Privacy
+& Security → Open Anyway** after a failed launch attempt.)
+
+### Linux / Windows
+
+```bash
+sudo dpkg -i geospatial-atlas-linux-x64.deb   # Debian / Ubuntu
+sudo rpm  -i geospatial-atlas-linux-x64.rpm   # Fedora / RHEL
+```
+
+On Windows, SmartScreen says "unrecognized publisher" — click **More
+info → Run anyway**.
+
+## Connect an LLM agent (Claude Desktop, Cursor, …)
+
+The app (CLI and desktop, starting with v0.0.2) ships a **Model Context
+Protocol** server at `/mcp`. LLM clients can drive the viewer live:
+run SQL, add charts, fly to coordinates, grab screenshots of regions,
+cross-filter by bounding box, and more. Full setup: [docs/MCP.md](docs/MCP.md).
+
+Tool surface at a glance (31 tools):
+
+- **Data** — `get_data_schema`, `run_sql_query`
+- **Charts** — `list_charts`, `add_chart`, `delete_chart`,
+  `get_chart_spec`/`set_chart_spec`,
+  `get_chart_state`/`set_chart_state`/`clear_chart_state`,
+  `get_chart_screenshot`
+- **Layout** — `get_layout_type`/`set_layout_type`,
+  `get_layout_state`/`set_layout_state`, `get_full_screenshot`
+- **Rendering** — `list_renderers`, `get_column_styles`, `set_column_style`
+- **Geospatial** (v0.0.2) — `get_map_viewport`, `fly_to_point`,
+  `fly_to_bbox`, `get_map_screenshot`, `get_map_screenshot_at`,
+  `select_bbox`, `clear_selection`, `count_in_bbox`, `find_nearby`,
+  `density_grid`, `highlight_points`, `set_basemap_style`
+
+Quick start with the CLI:
+
+```bash
+uv --directory packages/backend run geospatial-atlas your.parquet --mcp
+# → URL: http://localhost:5055
+# → MCP server: http://localhost:5055/mcp
+```
+
+Open the viewer at that URL in a real browser tab (for WebGPU), then
+point your LLM client's MCP config at `http://localhost:5055/mcp`. For
+autonomous / CI use, a Playwright-based headless viewer harness lives
+in `scripts/mcp_harness/`.
+
+The desktop app surfaces a copyable MCP URL directly in the UI after
+a dataset is loaded (enabled by default, toggleable on the picker).
+
+### Client config
+
+Most clients (Claude Desktop, Claude Code, Cursor, Continue, …) take a
+JSON entry with a single `url` field:
+
+```json
+{
+  "mcpServers": {
+    "geospatial-atlas": {
+      "url": "http://localhost:5055/mcp"
+    }
+  }
+}
+```
+
+Claude Desktop config file locations:
+
+| OS      | Path                                                                      |
+|---------|---------------------------------------------------------------------------|
+| macOS   | `~/Library/Application Support/Claude/claude_desktop_config.json`         |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json`                             |
+| Linux   | `~/.config/Claude/claude_desktop_config.json`                             |
+
+Fully quit and reopen the client — the 31 tools above should appear in
+the tool picker. Swap the port if the server picked a different one
+(the URL banner prints the actual port on launch).
 
 ## Build & Deploy GitHub Pages
 
