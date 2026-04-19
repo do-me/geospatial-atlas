@@ -1,8 +1,14 @@
 name: app release (desktop)
 
 # Builds the native desktop app (Tauri 2 shell + PyInstaller sidecar) for
-# macOS (arm64 + x86_64), Linux (x86_64 .deb + .AppImage + .rpm),
-# and Windows (x86_64 .msi + .exe NSIS installer).
+# macOS (arm64 only — see below), Linux (x86_64 .deb + .rpm), and
+# Windows (x86_64 .msi + .exe NSIS installer).
+#
+# macOS x86_64 was dropped starting with v0.0.2: macos-13 runners
+# routinely sit in the queue for >10 h before picking up a job, which
+# stalls every release. Intel-Mac users should fall back to the
+# ``uv run geospatial-atlas`` CLI path until GitHub restores sensible
+# macos-13 capacity.
 #
 # Trigger manually via the Actions tab or by pushing a tag shaped like
 # `app-v0.0.1`. On tag push, the built artifacts are attached to a draft
@@ -34,10 +40,6 @@ jobs:
             arch: arm64
             target: aarch64-apple-darwin
             runner: macos-14
-          - os: macos
-            arch: x64
-            target: x86_64-apple-darwin
-            runner: macos-13
           - os: linux
             arch: x64
             target: x86_64-unknown-linux-gnu
@@ -108,8 +110,6 @@ jobs:
           case "${{ matrix.os }}-${{ matrix.arch }}" in
             macos-arm64)
               PKGS="@rolldown/binding-darwin-arm64 lightningcss-darwin-arm64" ;;
-            macos-x64)
-              PKGS="@rolldown/binding-darwin-x64 lightningcss-darwin-x64" ;;
             linux-x64)
               PKGS="@rolldown/binding-linux-x64-gnu lightningcss-linux-x64-gnu" ;;
             windows-x64)
