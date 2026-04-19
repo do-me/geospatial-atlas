@@ -14,6 +14,7 @@ import {
 } from "../schemas.js";
 import { findUnusedId } from "../utils/identifier.js";
 import { screenshot, type ScreenshotOptions } from "../utils/screenshot.js";
+import { geoTools } from "./geo_tools.js";
 
 export interface ModelContextDelegate {
   context: ChartContext;
@@ -334,6 +335,7 @@ export function provideModelContext(api: ModelContextAPI, delegate: ModelContext
         return imageResponse(image);
       },
     },
+    ...geoTools(delegate),
   ];
 
   api.provideContext({ tools: tools });

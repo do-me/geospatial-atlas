@@ -23,6 +23,9 @@
   let progress: Progress | null = $state(null);
   let topN: string = $state("");
   let textCol: string = $state("");
+  let mcpEnabled: boolean = $state(true);
+  let mcpUrl: string = $state("");
+  let mcpCopied: boolean = $state(false);
 
   const STAGE_LABEL: Record<string, string> = {
     analyze: "Opening file",
@@ -57,14 +60,23 @@
   onMount(() => {
     checkWebGPU();
 
-    const unlistenReady = listen<{ url: string }>("sidecar-ready", async (event) => {
-      const prev = status;
-      const dataset = prev.kind === "loading" ? prev.dataset : "";
-      const savedHash = await invoke<string | null>("load_viewer_state").catch(() => null);
-      const target = event.payload.url + (savedHash ? `#${savedHash}` : "");
-      status = { kind: "ready", url: target, dataset };
-      window.location.replace(target);
-    });
+    // Load the persisted MCP preference (default: enabled).
+    invoke<boolean>("get_mcp_enabled").then((v) => {
+      mcpEnabled = v;
+    }).catch(() => {});
+
+    const unlistenReady = listen<{ url: string; mcp_url: string }>(
+      "sidecar-ready",
+      async (event) => {
+        const prev = status;
+        const dataset = prev.kind === "loading" ? prev.dataset : "";
+        const savedHash = await invoke<string | null>("load_viewer_state").catch(() => null);
+        const target = event.payload.url + (savedHash ? `#${savedHash}` : "");
+        mcpUrl = event.payload.mcp_url ?? "";
+        status = { kind: "ready", url: target, dataset };
+        window.location.replace(target);
+      },
+    );
 
     const unlistenError = listen<{ message: string }>("sidecar-error", (event) => {
       status = { kind: "error", message: event.payload.message };
@@ -153,6 +165,24 @@
           bind:value={textCol}
         />
       </div>
+      <div class="topn-row mcp-row">
+        <label class="topn-label" for="mcp-toggle">
+          Expose MCP (Model Context Protocol) endpoint
+        </label>
+        <input
+          id="mcp-toggle"
+          type="checkbox"
+          bind:checked={mcpEnabled}
+          onchange={() => {
+            invoke("set_mcp_enabled", { enabled: mcpEnabled }).catch(() => {});
+          }}
+        />
+      </div>
+      <p class="hint mcp-hint">
+        When enabled, Claude Desktop / Cursor / Continue can connect to
+        <code>http://127.0.0.1:&lt;port&gt;/mcp</code>. The port is picked
+        fresh each launch; it will be shown below once the viewer is up.
+      </p>
       <button onclick={pickDataset}>Open dataset…</button>
       <p class="hint">
         Choose a Parquet, GeoParquet, CSV, or Arrow file containing
@@ -209,6 +239,24 @@
   {:else if status.kind === "ready"}
     <section class="status">
       <p>Loading viewer at {status.url}…</p>
+      {#if mcpUrl}
+        <div class="mcp-panel">
+          <span class="mcp-label">MCP endpoint</span>
+          <code class="mcp-url">{mcpUrl}</code>
+          <button
+            class="mcp-copy"
+            onclick={async () => {
+              try {
+                await navigator.clipboard.writeText(mcpUrl);
+                mcpCopied = true;
+                setTimeout(() => (mcpCopied = false), 1500);
+              } catch {}
+            }}
+          >
+            {mcpCopied ? "Copied" : "Copy"}
+          </button>
+        </div>
+      {/if}
     </section>
   {/if}
 </main>
@@ -397,6 +445,46 @@
   .topn-input--wide {
     width: 220px;
     text-align: left;
+  }
+  .mcp-row {
+    gap: 0.75rem;
+  }
+  .mcp-hint {
+    margin-top: -0.5rem;
+    margin-bottom: 1rem;
+    color: #9097a3;
+  }
+  .mcp-panel {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-top: 0.75rem;
+    padding: 0.4rem 0.7rem;
+    border-radius: 6px;
+    background: #1a1e25;
+    border: 1px solid rgba(100, 116, 139, 0.25);
+    font-size: 0.8rem;
+  }
+  .mcp-label {
+    color: #a0a4ab;
+  }
+  .mcp-url {
+    color: #60a5fa;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    user-select: all;
+  }
+  .mcp-copy {
+    margin-left: auto;
+    padding: 0.15rem 0.6rem;
+    border-radius: 4px;
+    border: 1px solid rgba(100, 116, 139, 0.35);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font-size: 0.72rem;
+  }
+  .mcp-copy:hover {
+    background: rgba(100, 116, 139, 0.2);
   }
   .topn-input::placeholder {
     color: #565d6a;

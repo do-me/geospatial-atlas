@@ -9,14 +9,20 @@ The transport is **Streamable HTTP** — no bridge scripts, no Node.js, no stdio
 
 ## Setup (3 steps)
 
-### 1. Start the server with `--mcp`
+### 1. Start the server with MCP enabled
+
+**Via the Python CLI:**
 
 ```bash
-# Python CLI (available today)
 uv run geospatial-atlas /path/to/your.parquet --mcp
-
-# Or the native app (coming in a follow-up release)
 ```
+
+**Via the desktop app:** MCP is enabled by default. When you load a
+dataset, the idle-state launch form has an "Expose MCP endpoint"
+checkbox; the port is picked at launch time and shown (with a
+copy button) in the status panel. Uncheck to run without MCP. The
+preference is per-launch — closing the app returns to the default
+on/off you last set.
 
 The URL banner printed on launch is where the viewer *and* MCP clients connect:
 
@@ -33,6 +39,25 @@ http://localhost:5055
 
 The viewer is where the tool handlers actually execute (chart state, Mosaic coordinator,
 canvases all live in the webview). Keep the tab open while you're chatting with the LLM.
+
+**Two supported paths:**
+
+1. **Interactive — real Chrome/Safari tab.** What you want ~99 % of
+   the time: full WebGPU, fast tile loading, no headless quirks. Just
+   open the URL in your normal browser and leave the tab open.
+2. **Headless — Playwright chromium.** Useful for autonomous runs,
+   CI, or any time you don't want a visible window. Script:
+
+   ```bash
+   node scripts/mcp_harness/viewer_holder.mjs http://localhost:5055
+   ```
+
+   The harness prints `VIEWER READY` when the map hook is live and
+   stays up until killed. See `scripts/mcp_harness/mcp.sh` for a
+   companion curl wrapper (`list`, `call`, `sql`, `raw`).
+
+Either path exposes the exact same tool set to the MCP endpoint —
+clients can't tell which one is driving.
 
 ### 3. Point your LLM at `/mcp`
 
@@ -66,7 +91,7 @@ curl -s -X POST http://localhost:5055/mcp/ \
 
 That returns the live tools list as JSON.
 
-## The 19 tools
+## The tools
 
 ### Data
 - `get_data_schema` — table name + column list (names, types)
@@ -86,6 +111,58 @@ That returns the live tools list as JSON.
 ### Rendering
 - `list_renderers` — column renderer types (text, number, timestamp, bar, …)
 - `get_column_styles`, `set_column_style`
+
+### Geospatial (GIS datasets only)
+
+The geo tools operate on whichever embedding chart has `data.isGis = true`
+— they locate it by scanning `charts` and drive the MapLibre basemap
++ scatter overlay in lockstep by setting chart state. Screenshots only
+capture the rendered basemap after calling `map.once('idle')`, so tiles
+are guaranteed loaded before the PNG is produced.
+
+- `get_map_viewport` — current center (lon/lat), MapLibre zoom, bbox
+  (west/south/east/north), canvas size in CSS pixels, and the chart id.
+  Always the first tool to call when doing anything geographic.
+- `fly_to_point` — `{lon, lat, zoom?}`; zoom defaults to 10, clamped to
+  `[1, 19]`. Uses `jumpTo` internally so it's instantaneous.
+- `fly_to_bbox` — fit a `{west, south, east, north, padding?}` region.
+  Honours the viewport aspect ratio; `padding` is a fraction of the
+  smaller side.
+- `get_map_screenshot` — PNG of *just* the map canvas (scatter overlay +
+  basemap + markers), without the sidebar / charts / etc.
+- `get_map_screenshot_at` — composite: set viewport (either `{lon, lat,
+  zoom?}` or `{west, south, east, north, padding?}`), wait for the map
+  to become idle, then screenshot. Accepts an optional `settle_ms`
+  that adds fixed wait after tile idle (default 0).
+- `select_bbox` — cross-filter the whole viewer to rows whose `(lon, lat)`
+  falls in the bbox; sets the GIS chart's `brush`. Returns
+  `{applied, brush, matched_count}` where `matched_count` is a SQL
+  `COUNT(*)` inside the bbox (not the downsampled render count).
+- `clear_selection` — clear the brush.
+- `count_in_bbox` — read-only: just the row count inside a bbox. Does
+  *not* touch the brush. Use this when you're probing many candidate
+  regions.
+- `find_nearby` — `{lon, lat, radius_km?, limit?, columns?, where?}`.
+  Returns the nearest rows with great-circle distance. Pre-filters with
+  a degree-sized bbox so it's fast even on 75 M rows; requires an ad-hoc
+  SQL `where` fragment for extra filtering.
+- `density_grid` — `{west, south, east, north, nx?, ny?, top_k?}` —
+  bucket rows into an `nx × ny` grid and return per-cell counts. Great
+  for finding density outliers inside a specific region.
+- `highlight_points` — draw temporary circular markers (with optional
+  colour + label) at `{points: [{lon, lat, label?, color?, radius?}]}`.
+  Appears on the next `get_map_screenshot`. Pass `{points: []}` to clear.
+- `set_basemap_style` — `{style}` accepts a MapLibre style URL or one of
+  the built-in keys: `"openfreemap-liberty"` (default),
+  `"openfreemap-positron"`, `"openfreemap-bright"`, `"osm-raster"`,
+  `"none"`.
+
+**Viewport mechanics.** The GIS embedding chart stores its viewport as
+`{x, y, scale}` where `x = lon`, `y = projectLat(lat)`, and the derived
+MapLibre zoom is `log2(360 · scale · canvas_width / 1024)`. The geo
+tools translate to and from lat/lon + zoom automatically so clients
+shouldn't need to think about it. If for some reason you want to set
+viewport manually, `set_chart_state` with the GIS chart id still works.
 
 ## Architecture
 
@@ -120,9 +197,11 @@ becomes available to MCP clients automatically with zero Python changes.
 - **Read-only SQL enforced server-side.** The backend DuckDB connection has
   `enable_external_access = false` and `lock_configuration = true`. Attempts to
   mutate data will error out, not succeed silently.
-- **MCP needs `--mcp` to be enabled.** The CLI ships it as an opt-in flag; by default
-  MCP endpoints are not mounted. The native app ships with it `mcp=False` today —
-  a future "Enable Claude Desktop integration" toggle will wire it up in the UI.
+- **MCP needs to be opted in.** The CLI ships it as `--mcp`
+  (default off). The native desktop app ships it default **on**, with a
+  checkbox on the dataset picker to disable per-launch; once a dataset
+  is loaded the port is shown and the full `/mcp` URL can be copied
+  directly from the status panel.
 
 ## Example prompt
 

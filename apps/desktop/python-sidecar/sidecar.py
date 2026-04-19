@@ -267,6 +267,13 @@ def main() -> int:
 
     from embedding_atlas.server import make_server
 
+    # MCP (Model Context Protocol) is opt-in via GEOSPATIAL_ATLAS_MCP.
+    # The Tauri shell sets this when the user enables the "Claude Desktop
+    # integration" toggle; absent/0 -> MCP endpoints are not mounted.
+    _mcp_env = os.environ.get("GEOSPATIAL_ATLAS_MCP", "0").strip().lower()
+    enable_mcp = _mcp_env in ("1", "true", "yes", "on")
+    _log(f"MCP: {'enabled' if enable_mcp else 'disabled'}")
+
     # argv[2] is the optional row limit (0 or absent means "no limit").
     limit: Optional[int] = None
     if len(sys.argv) >= 3:
@@ -291,12 +298,14 @@ def main() -> int:
         data_source,
         static_path=static_path,
         duckdb_uri="server",
-        mcp=False,
+        mcp=enable_mcp,
         cors=False,
         duckdb_connection=connection,
     )
     _add_shutdown_endpoint(app)
 
+    if enable_mcp:
+        _log(f"MCP endpoint: http://{host}:{port}/mcp")
     _log(f"listening on http://{host}:{port}")
 
     import uvicorn

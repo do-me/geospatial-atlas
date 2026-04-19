@@ -252,8 +252,12 @@ class WebSocketHandler:
                 future.cancel()
         self.pending_requests.clear()
 
-    async def send_request(self, request: dict) -> dict:
-        """Send a request to the WebSocket and wait for response"""
+    async def send_request(self, request: dict, timeout: float = 300.0) -> dict:
+        """Send a request to the WebSocket and wait for response.
+
+        Timeout defaults to 5 min so MCP tools that run heavy DuckDB scans
+        over 75 M+ row datasets don't get guillotined at 30 s.
+        """
         if not self.is_connected:
             raise HTTPException(status_code=503, detail="WebSocket disconnected")
 
@@ -265,7 +269,7 @@ class WebSocketHandler:
 
         try:
             await self.websocket.send_text(json.dumps(payload))
-            response = await asyncio.wait_for(future, timeout=30.0)
+            response = await asyncio.wait_for(future, timeout=timeout)
             return response
 
         except asyncio.TimeoutError:

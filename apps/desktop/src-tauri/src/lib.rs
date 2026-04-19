@@ -19,11 +19,30 @@ struct RunningSidecar {
     intentional_kill: Arc<AtomicBool>,
 }
 
-#[derive(Default)]
 struct SidecarState {
     running: Mutex<Option<RunningSidecar>>,
     current_dataset: Mutex<Option<String>>,
     bootstrap_url: Mutex<Option<Url>>,
+    /// Whether to pass ``GEOSPATIAL_ATLAS_MCP=1`` when launching the
+    /// sidecar. Default true so Claude Desktop / Cursor / Continue can
+    /// attach out of the box. Toggle from the UI via
+    /// ``set_mcp_enabled`` to hide the endpoint.
+    mcp_enabled: Mutex<bool>,
+    /// Most recent MCP URL for the running sidecar, or empty when MCP is
+    /// off or no sidecar is running. Queryable from the frontend.
+    mcp_url: Mutex<String>,
+}
+
+impl Default for SidecarState {
+    fn default() -> Self {
+        Self {
+            running: Mutex::new(None),
+            current_dataset: Mutex::new(None),
+            bootstrap_url: Mutex::new(None),
+            mcp_enabled: Mutex::new(true),
+            mcp_url: Mutex::new(String::new()),
+        }
+    }
 }
 
 const SUPPORTED_EXTENSIONS: &[&str] = &[
@@ -33,6 +52,10 @@ const SUPPORTED_EXTENSIONS: &[&str] = &[
 #[derive(Serialize, Clone)]
 struct SidecarReady {
     url: String,
+    /// URL clients (Claude Desktop, Cursor, Continue, …) should point at
+    /// for the Model Context Protocol endpoint. Empty when MCP is
+    /// disabled via `SidecarState.mcp_enabled = false`.
+    mcp_url: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -111,6 +134,7 @@ async fn launch_sidecar(
     // argv[3] = text column name ("" means none).
     let text_arg = text.clone();
 
+    let mcp_on = *state.mcp_enabled.lock().unwrap();
     let mut cmd = tokio::process::Command::new(&sidecar_path);
     cmd.arg(&dataset)
         .arg(&limit_str)
@@ -118,6 +142,10 @@ async fn launch_sidecar(
         .env("GEOSPATIAL_ATLAS_HOST", host)
         .env("GEOSPATIAL_ATLAS_PORT", port.to_string())
         .env("GEOSPATIAL_ATLAS_PARENT_PID", std::process::id().to_string())
+        .env(
+            "GEOSPATIAL_ATLAS_MCP",
+            if mcp_on { "1" } else { "0" },
+        )
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -206,8 +234,22 @@ async fn launch_sidecar(
             }
             if let Ok(resp) = client.get(&health).send().await {
                 if resp.status().is_success() {
-                    let _ =
-                        app_for_poll.emit("sidecar-ready", SidecarReady { url: url_for_poll });
+                    let mcp_url = if mcp_on {
+                        format!("{url_for_poll}/mcp")
+                    } else {
+                        String::new()
+                    };
+                    {
+                        let state = app_for_poll.state::<SidecarState>();
+                        *state.mcp_url.lock().unwrap() = mcp_url.clone();
+                    }
+                    let _ = app_for_poll.emit(
+                        "sidecar-ready",
+                        SidecarReady {
+                            url: url_for_poll,
+                            mcp_url,
+                        },
+                    );
                     return;
                 }
             }
@@ -229,6 +271,9 @@ fn stop_running(state: &SidecarState) {
         rs.intentional_kill.store(true, Ordering::SeqCst);
         let _ = rs.child.start_kill();
     }
+    // The endpoint goes away with the process; clear the URL so the UI
+    // doesn't advertise a dead port.
+    state.mcp_url.lock().unwrap().clear();
 }
 
 fn kill_existing(state: &State<'_, SidecarState>) {
@@ -237,6 +282,26 @@ fn kill_existing(state: &State<'_, SidecarState>) {
 
 fn kill_on_exit(app: &AppHandle) {
     stop_running(&app.state::<SidecarState>());
+}
+
+#[tauri::command]
+fn get_mcp_url(state: State<'_, SidecarState>) -> String {
+    state.mcp_url.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn get_mcp_enabled(state: State<'_, SidecarState>) -> bool {
+    *state.mcp_enabled.lock().unwrap()
+}
+
+/// Toggle MCP on/off. Takes effect on the NEXT sidecar launch — the
+/// currently-running sidecar keeps its setting because toggling a
+/// running uvicorn-mounted ASGI app without a restart would require
+/// tearing down the FastAPI routes.
+#[tauri::command]
+fn set_mcp_enabled(state: State<'_, SidecarState>, enabled: bool) -> bool {
+    *state.mcp_enabled.lock().unwrap() = enabled;
+    enabled
 }
 
 #[tauri::command]
@@ -518,6 +583,9 @@ pub fn run() {
             load_viewer_state,
             save_viewer_state,
             return_home,
+            get_mcp_url,
+            get_mcp_enabled,
+            set_mcp_enabled,
         ])
         .on_page_load(|webview, _payload| {
             let _ = webview.eval(STATE_SYNC_SCRIPT);

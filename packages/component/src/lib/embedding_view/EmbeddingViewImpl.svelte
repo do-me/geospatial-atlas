@@ -482,6 +482,11 @@
           minZoom: 1,
           interactive: false,
           attributionControl: false,
+          // Needed so MCP `get_map_screenshot` (and any other toDataURL-
+          // based capture) includes the rendered basemap tiles. Without
+          // this, the WebGL drawing buffer is cleared after each frame
+          // and the screenshot shows only the overlay.
+          preserveDrawingBuffer: true,
         });
         // Expose map instance for E2E testing (no-op in production bundles via tree-shaking)
         if (typeof window !== "undefined") {
