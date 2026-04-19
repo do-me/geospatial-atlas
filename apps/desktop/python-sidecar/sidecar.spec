@@ -44,8 +44,26 @@ datas += _fp_data
 binaries += _fp_bin
 hiddenimports += _fp_hidden
 
-# FastAPI / Starlette / pydantic
-for mod in ("fastapi", "starlette", "pydantic", "pydantic_core", "anyio", "sniffio"):
+# FastAPI / Starlette / pydantic and the MCP stack.
+# mcp pulls in jsonschema → rfc3987_syntax, which ships a .lark grammar
+# data file next to its .py modules; without collect_all PyInstaller
+# skips that file and `from mcp import types` crashes at import time
+# (FileNotFoundError on syntax_rfc3987.lark). jsonschema_specifications
+# and referencing similarly ship .json schema resources.
+for mod in (
+    "fastapi",
+    "starlette",
+    "pydantic",
+    "pydantic_core",
+    "anyio",
+    "sniffio",
+    "mcp",
+    "jsonschema",
+    "jsonschema_specifications",
+    "referencing",
+    "rfc3987_syntax",
+    "sse_starlette",
+):
     try:
         d, b, h = collect_all(mod)
         datas += d
