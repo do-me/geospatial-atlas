@@ -3,8 +3,10 @@
   "private": true,
   "version": "0.0.4",
   "description": "Desktop viewer for geospatial & embedding data — Electron shell wrapping the Geospatial Atlas viewer + Python sidecar.",
+  "homepage": "https://github.com/do-me/geospatial-atlas",
   "author": {
-    "name": "Dominik Weckmüller"
+    "name": "Dominik Weckmüller",
+    "email": "dominik.weckmueller@gmail.com"
   },
   "license": "MIT",
   "type": "module",

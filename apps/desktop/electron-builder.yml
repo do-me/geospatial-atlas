@@ -67,6 +67,11 @@ dmg:
 linux:
   icon: icons
   category: Development
+  # FpmTarget requires this (else: "It is required to set Linux .deb
+  # package maintainer"). Falls back to author.email in package.json
+  # when omitted, but setting it explicitly makes the build reproducible
+  # independent of ambient metadata.
+  maintainer: Dominik Weckmüller <dominik.weckmueller@gmail.com>
   target:
     - target: deb
       arch: [x64]
