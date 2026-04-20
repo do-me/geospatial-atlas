@@ -1,0 +1,112 @@
+# electron-builder config for Geospatial Atlas desktop shell.
+#
+# Produces the same 5 artifact types as the prior Tauri build:
+#   macOS (arm64) → .dmg
+#   Linux  (x64)  → .deb, .rpm
+#   Windows(x64)  → .msi, .exe (NSIS)
+
+appId: io.github.do-me.geospatial-atlas
+productName: Geospatial Atlas
+copyright: MIT License
+
+# Source layout:
+#   electron/dist/  ← tsc-compiled main + preload
+#   dist/           ← Vite-built renderer
+#   resources/sidecar/ ← PyInstaller-built Python binary tree
+directories:
+  output: release
+  buildResources: electron
+
+files:
+  - "electron/dist/**/*"
+  - "dist/**/*"
+  - "package.json"
+  - "!**/*.{ts,map}"
+  - "!electron/*.ts"
+  - "!electron/tsconfig.json"
+  # Block monorepo hoisting from polluting the asar — we have no runtime
+  # dependencies, so everything in node_modules is build-time only.
+  - "!node_modules/**/*"
+  - "!**/{CHANGELOG,README,readme}.md"
+  - "!**/{LICENSE,license,COPYING,COPYING.md,AUTHORS}"
+  - "!**/*.d.ts"
+  - "!**/.github/**/*"
+  - "!**/tests/**/*"
+  - "!**/test/**/*"
+
+extraResources:
+  - from: resources/sidecar
+    to: sidecar
+    filter:
+      - "**/*"
+
+asar: true
+
+# Ad-hoc signing on macOS is handled automatically; unsigned on Windows
+# (users get the SmartScreen "unrecognized publisher" warning).
+mac:
+  category: public.app-category.developer-tools
+  icon: icons/icon.icns
+  entitlements: electron/entitlements.mac.plist
+  entitlementsInherit: electron/entitlements.mac.plist
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  identity: null
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  extendInfo:
+    NSHighResolutionCapable: true
+    LSMinimumSystemVersion: "11.0"
+
+dmg:
+  writeUpdateInfo: false
+  artifactName: ${productName}-${version}-${arch}.dmg
+
+linux:
+  icon: icons
+  category: Development
+  target:
+    - target: deb
+      arch: [x64]
+    - target: rpm
+      arch: [x64]
+
+deb:
+  artifactName: ${productName}-${version}-linux-${arch}.deb
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0
+
+rpm:
+  artifactName: ${productName}-${version}-linux-${arch}.rpm
+
+win:
+  icon: icons/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: msi
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-${version}-win-${arch}-setup.exe
+
+msi:
+  artifactName: ${productName}-${version}-win-${arch}.msi
+  perMachine: false
+
+# Reproducible builds: don't publish by default — the GitHub workflow
+# uploads artifacts via upload-artifact + softprops/action-gh-release.
+publish: null

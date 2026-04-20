@@ -89,7 +89,7 @@ The screenshots above were created with these two datasets:
 
 ## Desktop app releases
 
-Pre-built native apps (Tauri 2 shell + bundled Python sidecar) are on
+Pre-built native apps (Electron shell + bundled Python sidecar) are on
 the [releases page](https://github.com/do-me/geospatial-atlas/releases).
 
 | Platform                       | File                                         |

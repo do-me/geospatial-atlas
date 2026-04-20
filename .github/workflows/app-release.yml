@@ -1,18 +1,22 @@
 name: app release (desktop)
 
-# Builds the native desktop app (Tauri 2 shell + PyInstaller sidecar) for
+# Builds the desktop app (Electron shell + PyInstaller sidecar) for
 # macOS (arm64 only — see below), Linux (x86_64 .deb + .rpm), and
 # Windows (x86_64 .msi + .exe NSIS installer).
 #
 # macOS x86_64 was dropped starting with v0.0.2: macos-13 runners
 # routinely sit in the queue for >10 h before picking up a job, which
 # stalls every release. Intel-Mac users should fall back to the
-# ``uv run geospatial-atlas`` CLI path until GitHub restores sensible
-# macos-13 capacity.
+# ``uv run geospatial-atlas`` CLI path.
 #
 # Trigger manually via the Actions tab or by pushing a tag shaped like
 # `app-v0.0.1`. On tag push, the built artifacts are attached to a draft
 # GitHub Release.
+#
+# Note: the Rust toolchain + wasm-bindgen are still installed because
+# the viewer static bundle (packages/viewer + packages/component) pulls
+# in density-clustering and umap WASM crates. They are NOT used for the
+# shell itself — that is now Electron/Node, no Rust required.
 
 on:
   workflow_dispatch:
@@ -38,16 +42,16 @@ jobs:
         include:
           - os: macos
             arch: arm64
-            target: aarch64-apple-darwin
             runner: macos-14
+            electron_flag: --mac
           - os: linux
             arch: x64
-            target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
+            electron_flag: --linux
           - os: windows
             arch: x64
-            target: x86_64-pc-windows-msvc
             runner: windows-latest
+            electron_flag: --win
 
     steps:
       - uses: actions/checkout@v4
@@ -62,10 +66,10 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install Rust toolchain (+ wasm32 for density-clustering)
+      - name: Install Rust toolchain (wasm32 for density-clustering / umap)
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}, wasm32-unknown-unknown
+          targets: wasm32-unknown-unknown
 
       - name: Install wasm-bindgen CLI
         uses: baptiste0928/cargo-install@v3
@@ -77,33 +81,25 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: |
-            apps/desktop/src-tauri -> target
             packages/density-clustering -> target
-          shared-key: ${{ matrix.target }}
+          shared-key: ${{ matrix.os }}-${{ matrix.arch }}
 
-      # Linux: WebKitGTK + GTK for the Tauri webview, appindicator for tray,
-      # rpm/rpmbuild so 'tauri build' can emit the .rpm target (included in
-      # tauri.conf.json's "targets": "all").
+      # Linux: only rpmbuild is needed for electron-builder's .rpm target.
+      # WebKitGTK + libappindicator are NOT required — Electron ships
+      # Chromium; only GTK runtime libs are needed at the target's runtime
+      # (those become the .deb's Depends, not build-time packages).
       - name: Install Linux system deps
         if: matrix.os == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            rpm
+          sudo apt-get install -y rpm
 
       - name: Install npm workspaces (root → component, viewer, backend, …)
         run: npm install --no-audit --no-fund
 
       # Workaround for https://github.com/npm/cli/issues/4828: npm's
       # workspace install doesn't reliably install platform-specific
-      # optional deps (rolldown/lightningcss native bindings). Force-
-      # install the matching ones so viewer/component builds can
-      # require them at runtime.
+      # optional deps (rolldown/lightningcss native bindings).
       - name: Install platform-specific native bindings
         shell: bash
         run: |
@@ -123,12 +119,8 @@ jobs:
         working-directory: packages/backend
         run: uv sync --frozen
 
-      # Unified across platforms — runs in git-bash on Windows. The
-      # npm_config_script_shell override is needed because nested
-      # package.json scripts (density-clustering, umap-wasm) use
-      # 'rm -rf' which is not available in Windows cmd.exe; forcing
-      # bash as npm's script shell keeps one codepath for all four
-      # runners.
+      # Build viewer + backend static bundle — feeds into the PyInstaller
+      # sidecar binary (it serves this HTML/JS/WASM to the loopback origin).
       - name: Build viewer + backend static bundle
         working-directory: packages/backend
         shell: bash
@@ -144,39 +136,33 @@ jobs:
         working-directory: apps/desktop
         shell: bash
         run: |
-          if [ ! -f src-tauri/icons/icon.ico ]; then
+          if [ ! -f icons/icon.ico ]; then
             uv --project ../../packages/backend run --with Pillow \
-              python src-tauri/icons/make_icons.py
+              python icons/make_icons.py
           fi
 
       - name: Build PyInstaller sidecar
         working-directory: apps/desktop
         run: node python-sidecar/build.cjs
 
-      - name: Build Tauri app (unsigned)
+      - name: Build Electron app (unsigned)
         working-directory: apps/desktop
         shell: bash
         env:
-          # v0.0.1 ships unsigned. Empty APPLE_CERTIFICATE would otherwise
-          # trigger Tauri's signing path and fail with "security import".
-          # When you enable signing, wire the APPLE_* + WINDOWS_* secrets
-          # back into this env block.
-          CARGO_INCREMENTAL: "0"
+          # Ad-hoc codesigning only — no APPLE_* secrets wired up yet.
+          # electron-builder reads CSC_IDENTITY_AUTO_DISCOVERY=false to
+          # skip looking for Developer ID in the keychain.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          # Skip electron-builder's auto-update provider config.
+          USE_HARD_LINKS: "false"
         run: |
-          case "${{ matrix.os }}" in
-            macos)   bundles="app,dmg" ;;
-            # Skip AppImage for v0.0.1 — linuxdeploy has runtime issues
-            # on the ubuntu-22.04 runner (requires libfuse2 + DISPLAY).
-            # Users on Linux get .deb and .rpm.
-            linux)   bundles="deb,rpm" ;;
-            windows) bundles="msi,nsis" ;;
-          esac
-          npx tauri build --target ${{ matrix.target }} --bundles "$bundles"
+          npm run build
+          npx electron-builder ${{ matrix.electron_flag }} \
+            --config electron-builder.yml \
+            --publish never
 
       # Rename each bundle to a simple, space-free filename so the release
-      # page is cleaner AND so upload-artifact's glob doesn't trip on
-      # spaces (known v4 quirk where "dist-artifacts/**" silently
-      # matched zero files when the dir contained a file with spaces).
+      # page is cleaner.
       - name: Collect artifacts (rename to space-free names)
         working-directory: apps/desktop
         shell: bash
@@ -184,18 +170,18 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/dist-artifacts"
           DST="$GITHUB_WORKSPACE/dist-artifacts"
           BASE="geospatial-atlas-${{ matrix.os }}-${{ matrix.arch }}"
-          TGT=src-tauri/target/${{ matrix.target }}/release/bundle
+          SRC="release"
           case "${{ matrix.os }}" in
             macos)
-              f=$(ls "$TGT"/dmg/*.dmg 2>/dev/null | head -1) && cp "$f" "$DST/$BASE.dmg"
+              f=$(ls "$SRC"/*.dmg 2>/dev/null | head -1) && cp "$f" "$DST/$BASE.dmg"
               ;;
             linux)
-              f=$(ls "$TGT"/deb/*.deb 2>/dev/null | head -1) && cp "$f" "$DST/$BASE.deb"
-              f=$(ls "$TGT"/rpm/*.rpm 2>/dev/null | head -1) && cp "$f" "$DST/$BASE.rpm"
+              f=$(ls "$SRC"/*.deb 2>/dev/null | head -1) && cp "$f" "$DST/$BASE.deb"
+              f=$(ls "$SRC"/*.rpm 2>/dev/null | head -1) && cp "$f" "$DST/$BASE.rpm"
               ;;
             windows)
-              f=$(ls "$TGT"/msi/*.msi 2>/dev/null | head -1) && cp "$f" "$DST/$BASE.msi"
-              f=$(ls "$TGT"/nsis/*.exe 2>/dev/null | head -1) && cp "$f" "$DST/$BASE-setup.exe"
+              f=$(ls "$SRC"/*.msi 2>/dev/null | head -1) && cp "$f" "$DST/$BASE.msi"
+              f=$(ls "$SRC"/*setup*.exe 2>/dev/null | head -1) && cp "$f" "$DST/$BASE-setup.exe"
               ;;
           esac
           ls -la "$DST/"

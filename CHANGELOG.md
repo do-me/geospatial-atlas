@@ -6,6 +6,74 @@ Desktop-app releases are tagged `app-vX.Y.Z`. Other streams (Python package,
 static web viewer) have their own changelogs / tag prefixes — see
 [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## app-v0.0.4 — 2026-04-20
+
+**Shell migration: Tauri → Electron.** The native shell has been
+rewritten from the Tauri 2 / WKWebView stack to Electron 41.2.1 /
+Chromium 134. Same feature set, same Python sidecar, same 5-artifact
+matrix (`.dmg`, `.deb`, `.rpm`, `.msi`, NSIS `.exe`) — but the renderer
+now runs on the same Chromium + V8 + Dawn stack as the user's browser,
+so WebGPU scatter performance matches `chrome.google.com` exactly.
+
+### Why
+
+Profiling the v0.0.3 macOS build against Chrome on the same hardware
+(5 M points dataset) showed pan/zoom noticeably slower in the .app
+than in Chrome, despite both using Metal-backed WebGPU. The gap
+traced to the embedded webview: WKWebView runs MapLibre's per-frame
+JavaScript on JavaScriptCore (vs V8 in Chrome), issues WebGL draw
+calls through a less-tuned Metal bridge than Chromium's ANGLE, and
+composites the canvas through Core Animation rather than Chromium's
+Viz compositor. Switching to Electron collapses all three gaps; a
+5 M-point dataset now pans at Chrome-native framerate.
+
+### Changed
+
+- **Shell:** Tauri 2.2 Rust binary → Electron 41 main process
+  (TypeScript). Bundle size goes from ~500 MB (Tauri + sidecar) to
+  ~800 MB (Electron + sidecar). Electron pays for itself in perf.
+- **User state migration:** viewer state is still stored at
+  `{appData}/io.github.do-me.geospatial-atlas/viewer-state.json`, so
+  existing per-dataset view states from v0.0.1–v0.0.3 carry over.
+- **Linux runtime deps** (`.deb` `Depends`): swapped WebKitGTK / GTK+3 /
+  appindicator for the standard Chromium runtime set (`libgtk-3-0`,
+  `libnss3`, `libxss1`, `libxtst6`, `libsecret-1-0`, `libatspi2.0-0`,
+  `libnotify4`, `xdg-utils`, `libuuid1`). Most distros already have
+  these because they're what Chrome / Edge / Firefox pull in.
+- **CI:** dropped Rust for the shell (kept for density-clustering /
+  UMAP WASM). Dropped `libwebkit2gtk-4.1-dev` + friends from the Linux
+  runner. Build is ~35 % faster end-to-end.
+
+### Fixed
+
+- v0.0.3 macOS: on WKWebView, MapLibre's base-map canvas and the
+  embedding-atlas overlay both ran slower than Chrome's equivalent.
+  Migration to Chromium eliminates the gap.
+- File-picker + drag-drop now use Electron's native `dialog` and HTML5
+  `DataTransfer.files` path (via `webUtils.getPathForFile`) instead of
+  Tauri's `plugin-dialog`. Behaviour is identical.
+
+### Internal / build
+
+- `apps/desktop/src-tauri/` removed. Icons relocated to
+  `apps/desktop/icons/` (referenced by `electron-builder.yml`).
+- `apps/desktop/electron/` — new main + preload + entitlements.
+- `apps/desktop/electron-builder.yml` — packaging config for all 5
+  targets; ad-hoc signing on macOS arm64 (same as before).
+- `vite.config.js` — `base: "./"` so Vite emits relative asset URLs
+  that resolve under the asar when the renderer loads via `file://`.
+
+### Known issues
+
+- Still unsigned everywhere. macOS Gatekeeper shows the "damaged"
+  message; strip quarantine with `xattr -cr "/Applications/Geospatial Atlas.app"`.
+  Windows SmartScreen shows "unrecognized publisher"; More info →
+  Run anyway. Linux has no Gatekeeper equivalent.
+- macOS Intel still not shipped (runner queue issue, same as v0.0.2+).
+  Intel-Mac users: `uv run geospatial-atlas ...`.
+
+---
+
 ## app-v0.0.1 — 2026-04-18
 
 **First desktop release.** Native macOS app (Apple Silicon + Intel),

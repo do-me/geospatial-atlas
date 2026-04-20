@@ -1,26 +1,39 @@
 {
   "name": "geospatial-atlas-desktop",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.0.4",
+  "description": "Desktop viewer for geospatial & embedding data — Electron shell wrapping the Geospatial Atlas viewer + Python sidecar.",
+  "author": {
+    "name": "Dominik Weckmüller"
+  },
+  "license": "MIT",
   "type": "module",
+  "main": "electron/dist/main.js",
   "scripts": {
     "dev:ui": "vite",
     "build:ui": "vite build",
     "build:sidecar": "node python-sidecar/build.cjs",
-    "tauri": "tauri",
-    "dev": "tauri dev",
-    "build": "tauri build"
+    "build:electron": "tsc -p electron && node -e \"require('fs').writeFileSync('electron/dist/package.json', JSON.stringify({type:'commonjs'}))\"",
+    "build": "npm run build:ui && npm run build:electron",
+    "dev:electron": "wait-on http://127.0.0.1:1420 && npm run build:electron && electron .",
+    "dev": "concurrently -k -n UI,APP -c green,blue \"npm:dev:ui\" \"npm:dev:electron\"",
+    "pack": "npm run build && electron-builder --dir --config electron-builder.yml",
+    "dist": "npm run build && electron-builder --config electron-builder.yml",
+    "dist:mac": "npm run build && electron-builder --mac --config electron-builder.yml",
+    "dist:linux": "npm run build && electron-builder --linux --config electron-builder.yml",
+    "dist:win": "npm run build && electron-builder --win --config electron-builder.yml",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p electron/tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
-    "@tauri-apps/cli": "^2.2.4",
+    "@types/node": "^22.0.0",
+    "concurrently": "^9.0.0",
+    "electron": "^41.2.1",
+    "electron-builder": "^26.0.0",
     "svelte": "^5.54.1",
     "typescript": "^5.9.3",
-    "vite": "^8.0.1"
+    "vite": "^8.0.1",
+    "wait-on": "^8.0.0"
   },
-  "dependencies": {
-    "@tauri-apps/api": "^2.2.0",
-    "@tauri-apps/plugin-dialog": "^2.2.0",
-    "@tauri-apps/plugin-shell": "^2.2.0"
-  }
+  "dependencies": {}
 }

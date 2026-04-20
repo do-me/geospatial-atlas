@@ -1,10 +1,9 @@
 node_modules/
 dist/
 resources/sidecar/
-src-tauri/target/
-src-tauri/binaries/
-src-tauri/gen/
 python-sidecar/build/
 python-sidecar/dist/
 python-sidecar/__pycache__/
+electron/dist/
+release/
 .DS_Store

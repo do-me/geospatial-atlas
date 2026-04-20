@@ -1,8 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
-  import { open } from "@tauri-apps/plugin-dialog";
+  import { invoke, listen, open } from "./bridge";
 
   type Status =
     | { kind: "idle" }
@@ -127,7 +125,7 @@
 <main>
   <header>
     <h1>Geospatial Atlas</h1>
-    <p class="tagline">WebGPU-enabled MacOS viewer for geospatial &amp; embedding data</p>
+    <p class="tagline">WebGPU-enabled viewer for geospatial &amp; embedding data</p>
   </header>
 
   <div class="gpu-row">

@@ -1,46 +1,50 @@
-# Geospatial Atlas — native macOS app
+# Geospatial Atlas — desktop app
 
-A Tauri 2 wrapper that ships the FastAPI backend and the Svelte viewer as a
-single native macOS application.
+An Electron wrapper that ships the FastAPI backend and the Svelte viewer as
+a single native application for macOS, Linux, and Windows. The shell uses
+Chromium, so WebGPU and V8 performance match the user's Chrome browser
+exactly — important because the viewer is a WebGPU-accelerated scatter
+renderer that is noticeably slower under WebKit-based webviews.
 
 ## Architecture
 
 ```
-┌──────────────────────── .app ─────────────────────────┐
-│ Contents/MacOS/                                        │
-│   geospatial-atlas-mac         ← Rust / Tauri shell    │
-│   geospatial-atlas-sidecar     ← shell stub            │
-│ Contents/Resources/                                    │
-│   sidecar/                     ← PyInstaller --onedir  │
-│     geospatial-atlas-sidecar   ← real Python binary    │
-│     _internal/                 ← duckdb, pyarrow, etc. │
-│       embedding_atlas/static/  ← prebuilt Svelte viewer│
-└────────────────────────────────────────────────────────┘
+┌──────────────────────── .app / installer ──────────────────────┐
+│ (macOS)  Contents/MacOS/Geospatial Atlas  ← Electron main        │
+│ (macOS)  Contents/Resources/app.asar      ← main.js + preload.js │
+│                                              + built Svelte UI   │
+│ (macOS)  Contents/Resources/sidecar/      ← PyInstaller --onedir │
+│             geospatial-atlas-sidecar      ← real Python binary   │
+│             _internal/                    ← duckdb, pyarrow, etc │
+│               embedding_atlas/static/     ← prebuilt Svelte view │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 Lifecycle:
 
-1. Tauri launches the Rust shell → opens a WKWebView with the Svelte
-   bootstrap UI (`src/App.svelte`).
-2. User picks a dataset (or passes one via argv / `GEOSPATIAL_ATLAS_INITIAL_DATASET`).
-3. Rust picks a free TCP port via `portpicker`, spawns the sidecar with
-   `GEOSPATIAL_ATLAS_HOST`, `GEOSPATIAL_ATLAS_PORT`, and
+1. Electron main launches the `BrowserWindow` and loads the Svelte
+   bootstrap UI (`src/App.svelte`) via the preload bridge.
+2. User picks a dataset (file picker, drag-drop, or argv /
+   `GEOSPATIAL_ATLAS_INITIAL_DATASET`).
+3. Main process picks a free TCP port, spawns the PyInstaller sidecar
+   with `GEOSPATIAL_ATLAS_HOST`, `GEOSPATIAL_ATLAS_PORT`, and
    `GEOSPATIAL_ATLAS_PARENT_PID` in the environment.
-4. The sidecar (PyInstaller `--onedir`) loads the dataset, auto-detects
-   GIS columns, starts FastAPI + uvicorn.
-5. Rust polls `/data/metadata.json` and emits a `sidecar-ready` event; the
-   Svelte UI redirects the webview to `http://127.0.0.1:<PORT>`.
-6. On Cmd+Q (`RunEvent::ExitRequested`) the Rust shell kills the sidecar.
-   As belt-and-suspenders the sidecar also runs three parallel watchdogs:
-   stdin-EOF, `kqueue NOTE_EXIT`, and a getppid poll.
+4. Sidecar (PyInstaller `--onedir`) loads the dataset, auto-detects GIS
+   columns, starts FastAPI + uvicorn.
+5. Main polls `/data/metadata.json`, emits `sidecar-ready`; the Svelte UI
+   redirects the webview to `http://127.0.0.1:<PORT>`.
+6. On quit the main process kills the sidecar. Belt-and-suspenders: the
+   sidecar also runs three parallel watchdogs (stdin-EOF, `kqueue
+   NOTE_EXIT`, and a getppid poll).
 
 ## Prerequisites
 
-- macOS 11 or later
-- Rust / `cargo` (2024 edition)
-- Node 20+
-- `uv` (for the backend venv)
-- `cargo-tauri` CLI: `cargo install tauri-cli --version "^2.0"`
+- macOS 11+, Linux (Ubuntu 22.04+ equivalent), or Windows 10+
+- Node 22+
+- `uv` (for the Python backend venv)
+- Rust toolchain (`rustup`) with `wasm32-unknown-unknown` — needed for
+  the viewer's density-clustering + UMAP WASM crates, **not** for the
+  shell
 
 ## Build from source
 
@@ -52,37 +56,35 @@ npm install
 
 # 2. Build the Svelte viewer for the backend (required — provides
 #    embedding_atlas/static bundled into the sidecar)
-cd ../packages/backend && ./build.sh && cd ../../apps/desktop
+cd ../../packages/backend && ./build.sh && cd ../../apps/desktop
 
 # 3. Build the PyInstaller sidecar for the host arch
 npm run build:sidecar
 
-# 4. Build the .app + .dmg
-npm run build
+# 4. Build the Electron app + platform installer
+npm run dist              # auto-detect host platform
+# or force a specific target:
+npm run dist:mac          # .dmg
+npm run dist:linux        # .deb + .rpm
+npm run dist:win          # .msi + NSIS .exe
 ```
 
-Artifacts land in:
-
-- `src-tauri/target/release/bundle/macos/Geospatial Atlas.app`
-- `src-tauri/target/release/bundle/dmg/Geospatial Atlas_<version>_aarch64.dmg`
+Artifacts land in `apps/desktop/release/`.
 
 ## Running
 
-**From the Finder / Dock:** double-click the `.app`. The file picker opens;
-choose any Parquet/CSV/GeoParquet file that has `lon`/`lat` columns or a
-WKB `geometry` column.
+**From Finder / file manager:** double-click the installer, then launch
+the installed app. The picker opens; choose any Parquet/CSV/GeoParquet
+file with `lon`/`lat` columns or a WKB `geometry` column.
 
 **From the command line with a dataset pre-loaded:**
 
 ```bash
-"src-tauri/target/release/bundle/macos/Geospatial Atlas.app/Contents/MacOS/geospatial-atlas-mac" \
-  /path/to/your.parquet
-```
-
-Or equivalently with `open`:
-
-```bash
+# macOS
 open -a "Geospatial Atlas" --args /path/to/your.parquet
+
+# or invoke the binary directly (works on Linux/Windows too)
+"release/mac-arm64/Geospatial Atlas.app/Contents/MacOS/Geospatial Atlas" /path/to/your.parquet
 ```
 
 A sample test dataset is bundled in the repo at
@@ -94,37 +96,34 @@ A sample test dataset is bundled in the repo at
 # Make sure the sidecar binary exists at least once
 npm run build:sidecar
 
-# Then live-reload the Svelte UI and auto-rebuild Rust
+# Live-reload the Svelte UI + auto-rebuild the main process on change
 npm run dev
 ```
 
-## Cross-compiling for x86_64
-
-```bash
-# In a Rosetta shell (arch -x86_64 zsh)
-TARGET_TRIPLE=x86_64-apple-darwin npm run build:sidecar:x86_64
-# then from normal shell
-cargo tauri build --target x86_64-apple-darwin
-```
-
-Ship two DMGs rather than a universal2 bundle — the DuckDB / PyArrow
-wheel machinery makes true universal2 a multi-day engineering task with
-no user-visible win.
+The `dev` script runs Vite + Electron in parallel via `concurrently`;
+Electron loads `http://127.0.0.1:1420` where Vite serves the renderer
+with HMR.
 
 ## Signing / notarization
 
-For distribution beyond a developer machine, set:
+Current builds ship **unsigned**. macOS Gatekeeper shows "Geospatial
+Atlas.app is damaged" on first launch; the fix is:
 
 ```bash
-export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
-export APPLE_ID="you@example.com"
-export APPLE_APP_SPECIFIC_PASSWORD="xxxx-xxxx-xxxx-xxxx"
+xattr -cr "/Applications/Geospatial Atlas.app"
 ```
 
-and run `npm run build`. Tauri signs the entire bundle (including every
-`.dylib` under `Contents/Resources/sidecar/`). The `entitlements.plist`
-already contains the three flags required for a bundled Python
-interpreter under the hardened runtime:
+or System Settings → Privacy & Security → Open Anyway.
+
+For production distribution, wire the following secrets and set
+`identity` in `electron-builder.yml`:
+
+- `CSC_LINK` + `CSC_KEY_PASSWORD` — Developer ID certificate (macOS)
+- `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID` — notarization
+- `WINDOWS_CERTIFICATE_FILE` + `WINDOWS_CERTIFICATE_PASSWORD` — EV codesign
+
+`entitlements.mac.plist` already contains the flags required for the
+bundled Python interpreter under hardened runtime:
 
 - `com.apple.security.cs.allow-jit`
 - `com.apple.security.cs.allow-unsigned-executable-memory`
@@ -133,10 +132,10 @@ interpreter under the hardened runtime:
 ## Known limitations
 
 - First launch takes ~8–12 s while PyInstaller unpacks native libs and
-  Python cold-imports pyarrow + DuckDB. Subsequent launches are ~2–3 s
-  because of macOS's dyld cache.
+  Python cold-imports pyarrow + DuckDB. Subsequent launches are ~2–3 s.
+- macOS Intel (`x86_64`) pre-built bundles were dropped starting v0.0.2
+  because `macos-13` GitHub runners sit in queue for hours. Intel-Mac
+  users should use the `uv run geospatial-atlas ...` CLI path.
 - Embedding projection (UMAP) is *not* bundled — this build is a GIS
   viewer. Install the Python CLI (`uv tool install embedding-atlas`) if
   you need that pipeline.
-- Unsigned builds require right-click → Open the first time (Gatekeeper
-  quarantine). Signed + notarized builds open normally.

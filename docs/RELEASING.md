@@ -19,12 +19,9 @@ Mobile is documented in [MOBILE.md](./MOBILE.md) and not shipped yet.
 The desktop app is the one you want to ship today. Minimal path:
 
 ```bash
-# 1. Bump the version in three places (all read during CI build)
-#    - apps/desktop/src-tauri/Cargo.toml           [package] version
-#    - apps/desktop/src-tauri/tauri.conf.json      "version"
-#    - apps/desktop/package.json                   "version"
-#
-#    (A helper script would be nice later. Today: three greps + edits.)
+# 1. Bump the version in apps/desktop/package.json ("version").
+#    (electron-builder reads that single source of truth — no other
+#    files to bump since the Tauri shell was replaced with Electron.)
 #
 # 2. Update CHANGELOG.md with the highlights.
 #
@@ -41,9 +38,9 @@ Pushing the `app-v0.0.1` tag triggers
 
 1. Spawns four matrix builds: **macOS arm64**, **macOS x64**, **Linux x64**,
    **Windows x64**.
-2. Builds the viewer → backend static → PyInstaller sidecar → Tauri app
-   for each.
-3. Uploads `.dmg`, `.AppImage`, `.deb`, `.msi`, and `.exe` artifacts.
+2. Builds the viewer → backend static → PyInstaller sidecar → Electron
+   app (via `electron-builder`) for each.
+3. Uploads `.dmg`, `.deb`, `.rpm`, `.msi`, and `.exe` artifacts.
 4. Creates a **draft** GitHub Release with the tag as name and all
    artifacts attached.
 5. You review the draft on github.com, write release notes (or let the
@@ -95,21 +92,24 @@ When you outgrow the unsigned warnings:
    ```bash
    base64 -i cert.p12 -o cert.b64
    ```
-4. Add these to repo **Settings → Secrets and variables → Actions**:
-   - `APPLE_SIGNING_IDENTITY` = `"Developer ID Application: Your Name (TEAMID)"`
-   - `APPLE_CERTIFICATE` = contents of `cert.b64`
-   - `APPLE_CERTIFICATE_PASSWORD`
+4. Add these to repo **Settings → Secrets and variables → Actions**
+   (electron-builder's standard env vars):
+   - `CSC_LINK` = contents of `cert.b64` (or an https URL to it)
+   - `CSC_KEY_PASSWORD` = the `.p12` password
    - `APPLE_ID`
    - `APPLE_APP_SPECIFIC_PASSWORD` (from appleid.apple.com)
    - `APPLE_TEAM_ID`
 
-The CI already reads these env vars and skips signing if any are absent.
+The workflow currently sets `CSC_IDENTITY_AUTO_DISCOVERY=false` to
+force unsigned builds; remove that line when you wire secrets up.
+electron-builder auto-enables notarization when the `APPLE_*` env
+vars are present.
 
 ### Windows
 
 EV code-signing certs cost $200–400/year. Then:
-- `WINDOWS_CERTIFICATE` = base64 of `.pfx`
-- `WINDOWS_CERTIFICATE_PASSWORD`
+- `CSC_LINK` (Windows runner) = base64 of `.pfx`
+- `CSC_KEY_PASSWORD` = the `.pfx` password
 
 ### Linux
 
@@ -128,7 +128,7 @@ Keep a top-level `CHANGELOG.md`. Prepend on each release:
 **First desktop release.**
 
 ### Added
-- Native macOS / Linux / Windows app (Tauri 2 + PyInstaller sidecar).
+- Native macOS / Linux / Windows app (Electron + PyInstaller sidecar).
 - Fast path for GeoParquet files via DuckDB spatial (`ST_X`/`ST_Y`).
 - Live progress bar during load (DuckDB `query_progress()`).
 - Per-dataset URL-hash persistence.
