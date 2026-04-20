@@ -194,13 +194,10 @@ async function dragPan(page: Page, seconds: number): Promise<unknown> {
  */
 interface SweepConfig { tag: string; query: string; description: string; targetScale?: number }
 const CONFIGS: SweepConfig[] = [
-  { tag: "world-default",  query: "perf=1",                                                     description: "world view, defaults (4M cap, density on)" },
-  { tag: "world-200k",     query: "perf=1&downsampleMax=200000&densityWeight=0",                description: "world view, 200k cap, uniform" },
-  { tag: "world-floor",    query: "perf=1&downsampleMax=1&densityWeight=0",                     description: "world view, cap-1 (pure compute floor)" },
-  { tag: "city-default",   query: "perf=1",                                                     description: "city view (zoom-in 6 levels), defaults",      targetScale: 5.0 },
-  { tag: "city-200k",      query: "perf=1&downsampleMax=200000&densityWeight=0",                description: "city view, 200k cap, uniform",                 targetScale: 5.0 },
-  { tag: "city-floor",     query: "perf=1&downsampleMax=1&densityWeight=0",                     description: "city view, cap-1",                              targetScale: 5.0 },
-  { tag: "region-default", query: "perf=1",                                                     description: "region view (zoom-in 3 levels), defaults",     targetScale: 0.5 },
+  { tag: "world-now",       query: "perf=1",                                                     description: "world view, defaults — adaptive cap should kick in" },
+  { tag: "world-no-adaptive", query: "perf=1&interactiveCap=0",                                  description: "world view, defaults, adaptive cap DISABLED for A/B" },
+  { tag: "world-200k",      query: "perf=1&downsampleMax=200000&densityWeight=0",                description: "world view, 200k cap (no adaptive needed)" },
+  { tag: "city-now",        query: "perf=1",                                                     description: "city view, defaults",                          targetScale: 5.0 },
 ];
 
 async function setViewport(page: Page, scale: number) {

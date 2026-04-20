@@ -24,6 +24,13 @@ if (typeof window !== "undefined") {
   if (dw !== undefined) overrides.downsampleDensityWeight = dw;
   const ps = numParam("pointSize");
   if (ps !== undefined) overrides.pointSize = ps;
+  const ic = numParam("interactiveCap");
+  if (ic !== undefined) {
+    // 0 disables the adaptive cap entirely. We pass Infinity so the
+    // renderer's "Number.isFinite" guard makes it a no-op while still
+    // distinguishing "explicitly disabled" from "no override given".
+    overrides.downsampleMaxPointsInteractive = ic === 0 ? (Infinity as any) : ic;
+  }
   const mode = params.get("renderMode");
   if (mode === "density" || mode === "points") {
     (overrides as any).renderMode = mode;

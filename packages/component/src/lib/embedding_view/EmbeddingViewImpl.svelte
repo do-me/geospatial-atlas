@@ -219,6 +219,20 @@
   let coordinateAtPoint = $derived(resolvedViewport.coordinateAtPixelFunction());
 
   let preventHover = $state(false);
+  // True while the user is actively interacting (drag or recent wheel).
+  // Used to drop the effective downsample cap so high-frame-rate pan stays
+  // fluent at very large datasets — the configured cap only kicks in once
+  // the gesture ends and the renderer has time to draw the full sample.
+  let isInteracting = $state(false);
+  let interactionDecayTimer: ReturnType<typeof setTimeout> | null = null;
+  function bumpInteraction() {
+    isInteracting = true;
+    if (interactionDecayTimer != null) clearTimeout(interactionDecayTimer);
+    interactionDecayTimer = setTimeout(() => {
+      isInteracting = false;
+      interactionDecayTimer = null;
+    }, 150);
+  }
 
   function compareSelection(a: Selection, b: Selection) {
     return a.x == b.x && a.y == b.y && a.category == b.category && a.text == b.text;
@@ -282,6 +296,32 @@
   let autoLabelEnabled = $derived(config?.autoLabelEnabled);
   let downsampleMaxPoints = $derived(perfOverrides?.downsampleMaxPoints ?? config?.downsampleMaxPoints ?? 4000000);
   let downsampleDensityWeight = $derived(perfOverrides?.downsampleDensityWeight ?? config?.downsampleDensityWeight ?? 5);
+  // Cap to use during active drag/wheel. Defaults to a value that keeps
+  // 75M-row Overture parquets at >20fps on Apple Silicon WebGPU; opt-out
+  // via downsampleMaxPointsInteractive=null in config or ?interactiveCap=0
+  // in the URL.
+  let downsampleMaxPointsInteractive = $derived(
+    // Explicit Infinity / very large value disables the adaptive cap.
+    // ?? short-circuits on null and undefined, so we deliberately use a
+    // sentinel here: the caller can pass Infinity to opt out without
+    // having to know the configured `downsampleMaxPoints`.
+    perfOverrides && "downsampleMaxPointsInteractive" in perfOverrides
+      ? perfOverrides.downsampleMaxPointsInteractive
+      : config?.downsampleMaxPointsInteractive ?? 200_000,
+  );
+  let effectiveDownsampleMaxPoints = $derived(
+    isInteracting &&
+      downsampleMaxPointsInteractive != null &&
+      Number.isFinite(downsampleMaxPointsInteractive)
+      ? Math.min(downsampleMaxPoints, downsampleMaxPointsInteractive as number)
+      : downsampleMaxPoints,
+  );
+  let effectiveDownsampleDensityWeight = $derived(
+    // Density weighting buys nothing while the user is dragging — the
+    // renderer otherwise pays for accumulate + blur over all 75M points
+    // every frame just to bias sampling that's about to be redrawn.
+    isInteracting ? 0 : downsampleDensityWeight,
+  );
   let mapStyle = $derived(
     isGis ? (config?.mapStyle !== undefined ? config.mapStyle : "https://tiles.openfreemap.org/styles/liberty") : null,
   );
@@ -321,8 +361,8 @@
       category: data.category,
       categoryCount,
       categoryColors: resolvedCategoryColors,
-      downsampleMaxPoints,
-      downsampleDensityWeight,
+      downsampleMaxPoints: effectiveDownsampleMaxPoints,
+      downsampleDensityWeight: effectiveDownsampleDensityWeight,
       isGis,
       ...viewingParams,
     });
@@ -552,6 +592,7 @@
 
   function onWheel(e: WheelEvent) {
     e.preventDefault();
+    bumpInteraction();
     let { x, y } = localCoordinates(e);
     let scaler = Math.exp(-e.deltaY / 200);
     onZoom(scaler, { x, y });
@@ -645,13 +686,21 @@
         let sy = isGis ? -sx : c0.y - c1.y;
         let x0 = resolvedViewportState.x;
         let y0 = resolvedViewportState.y;
+        bumpInteraction();
         return {
           move: (e2: CursorValue) => {
+            bumpInteraction();
             setViewportState({
               x: x0 + (e2.clientX - e1.clientX) * sx,
               y: y0 + (e2.clientY - e1.clientY) * sy,
               scale: resolvedViewportState.scale,
             });
+          },
+          up: () => {
+            // Decay timer will clear isInteracting; we deliberately don't
+            // immediately drop it so the user-visible re-render to full
+            // detail doesn't happen mid-flight while there are still
+            // queued frames in the swap chain.
           },
         };
       }

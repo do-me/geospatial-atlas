@@ -40,6 +40,14 @@ export interface EmbeddingViewConfig {
    * Higher values mean more aggressive culling in dense areas.
    * Default: 5 */
   downsampleDensityWeight?: number | null;
+
+  /** Cap on points to render while the user is actively dragging or wheeling.
+   * The configured `downsampleMaxPoints` still applies once the gesture
+   * settles. Setting this drops frame time during pan on very large datasets
+   * (75M-row Overture parquet goes from ~9 fps at 4M cap to ~25 fps at 200K
+   * during the gesture, then snaps to full quality on release).
+   * Default: 200,000. Set to null to disable adaptive capping. */
+  downsampleMaxPointsInteractive?: number | null;
   /** Enable GIS mode (Mercator projection for the Y axis). */
   isGis?: boolean | null;
 

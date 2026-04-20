@@ -1,0 +1,490 @@
+{
+  "parquet": "/Users/dome/work/overture/places_data/places_simplified.parquet",
+  "loadDurationMs": 21518,
+  "gpu": {
+    "ok": true,
+    "maxBufferSize": 4294967292,
+    "maxStorageBufferBindingSize": 4294967292,
+    "maxComputeWorkgroupStorageSize": 32768,
+    "adapterInfo": {
+      "vendor": "apple",
+      "architecture": "metal-3",
+      "device": "",
+      "description": ""
+    },
+    "features": [
+      "depth32float-stencil8",
+      "chromium-experimental-subgroup-matrix",
+      "rg11b10ufloat-renderable",
+      "texture-formats-tier1",
+      "bgra8unorm-storage",
+      "texture-compression-bc",
+      "dual-source-blending",
+      "core-features-and-limits",
+      "float32-filterable",
+      "indirect-first-instance",
+      "texture-compression-astc-sliced-3d",
+      "float32-blendable",
+      "texture-compression-astc",
+      "texture-compression-etc2",
+      "depth-clip-control",
+      "texture-compression-bc-sliced-3d",
+      "texture-formats-tier2",
+      "shader-f16",
+      "timestamp-query",
+      "clip-distances",
+      "primitive-index",
+      "texture-component-swizzle",
+      "subgroups"
+    ]
+  },
+  "coldSummary": {
+    "count": 6,
+    "windowSeconds": 18.56170000000298,
+    "fps": 0.2699230181331562,
+    "pointCount": 75495994,
+    "downsampleRatio": 0.3333333333333333,
+    "cpu": {
+      "count": 6,
+      "meanMs": 84.29999999453624,
+      "p50Ms": 1.2999999523162842,
+      "p95Ms": 257.6000061035156,
+      "p99Ms": 257.6000061035156,
+      "maxMs": 257.6000061035156
+    },
+    "interval": {
+      "count": 5,
+      "meanMs": 3704.7599975585936,
+      "p50Ms": 257.79998779296875,
+      "p95Ms": 14674,
+      "p99Ms": 14674,
+      "maxMs": 14674
+    },
+    "gpu": {
+      "count": 4,
+      "meanMs": 16.949999928474426,
+      "p50Ms": 25.600000381469727,
+      "p95Ms": 26.899999618530273,
+      "p99Ms": 26.899999618530273,
+      "maxMs": 26.899999618530273
+    }
+  },
+  "panSeconds": 6,
+  "timestamp": "2026-04-20T23:09:07.322Z",
+  "gitHead": null,
+  "runs": [
+    {
+      "config": {
+        "tag": "baseline-4M",
+        "query": "perf=1",
+        "description": "default 4M cap, density on"
+      },
+      "dragInfo": {
+        "svgFound": true,
+        "svgTagName": "svg",
+        "downTargetRect": {
+          "x": 6.5,
+          "y": 41,
+          "w": 1181,
+          "h": 646
+        },
+        "movesFired": 38,
+        "viewportChanges": 38,
+        "startState": "{\"x\":4.3800268102423,\"y\":35.500330605,\"scale\":0.004817010066798382,\"width\":1181,\"height\":646,\"isGis\":true}",
+        "endState": {
+          "x": 4.0284643102423,
+          "y": -21.452794394999998,
+          "scale": 0.004817010066798382,
+          "width": 1181,
+          "height": 646,
+          "isGis": true
+        }
+      },
+      "panSummary": {
+        "count": 39,
+        "windowSeconds": 6.627399999991059,
+        "fps": 6.264527985472892,
+        "pointCount": 75495994,
+        "downsampleRatio": 1,
+        "cpu": {
+          "count": 39,
+          "meanMs": 0.10769230738664284,
+          "p50Ms": 0.09999999403953552,
+          "p95Ms": 0.20000000298023224,
+          "p99Ms": 0.20000000298023224,
+          "maxMs": 0.20000000298023224
+        },
+        "interval": {
+          "count": 38,
+          "meanMs": 159.62894607845107,
+          "p50Ms": 170.6999969482422,
+          "p95Ms": 191,
+          "p99Ms": 191.6999969482422,
+          "maxMs": 191.6999969482422
+        },
+        "gpu": {
+          "count": 38,
+          "meanMs": 662.9421065481085,
+          "p50Ms": 685.7999877929688,
+          "p95Ms": 728.7000122070312,
+          "p99Ms": 742.0999755859375,
+          "maxMs": 742.0999755859375
+        }
+      }
+    },
+    {
+      "config": {
+        "tag": "4M-nodens",
+        "query": "perf=1&densityWeight=0",
+        "description": "4M cap, skips accumulate+blur"
+      },
+      "dragInfo": {
+        "svgFound": true,
+        "svgTagName": "svg",
+        "downTargetRect": {
+          "x": 6.5,
+          "y": 41,
+          "w": 1181,
+          "h": 646
+        },
+        "movesFired": 33,
+        "viewportChanges": 33,
+        "startState": "{\"x\":4.3800268102423,\"y\":35.500330605,\"scale\":0.004817010066798382,\"width\":1181,\"height\":646,\"isGis\":true}",
+        "endState": {
+          "x": -16.0105981897577,
+          "y": -17.585606894999998,
+          "scale": 0.004817010066798382,
+          "width": 1181,
+          "height": 646,
+          "isGis": true
+        }
+      },
+      "panSummary": {
+        "count": 34,
+        "windowSeconds": 6.728700000002981,
+        "fps": 5.347593594044425,
+        "pointCount": 75495994,
+        "downsampleRatio": 1,
+        "cpu": {
+          "count": 34,
+          "meanMs": 0.09411764714647741,
+          "p50Ms": 0.09999999403953552,
+          "p95Ms": 0.20000000298023224,
+          "p99Ms": 0.20000000298023224,
+          "maxMs": 0.20000000298023224
+        },
+        "interval": {
+          "count": 33,
+          "meanMs": 186.9999996098605,
+          "p50Ms": 202.8000030517578,
+          "p95Ms": 252.8000030517578,
+          "p99Ms": 267,
+          "maxMs": 267
+        },
+        "gpu": {
+          "count": 32,
+          "meanMs": 751.9531288146973,
+          "p50Ms": 799.5999755859375,
+          "p95Ms": 888.4000244140625,
+          "p99Ms": 889.7000122070312,
+          "maxMs": 889.7000122070312
+        }
+      }
+    },
+    {
+      "config": {
+        "tag": "cap-50k",
+        "query": "perf=1&downsampleMax=50000&densityWeight=0",
+        "description": "50k cap, uniform"
+      },
+      "dragInfo": {
+        "svgFound": true,
+        "svgTagName": "svg",
+        "downTargetRect": {
+          "x": 6.5,
+          "y": 41,
+          "w": 1181,
+          "h": 646
+        },
+        "movesFired": 67,
+        "viewportChanges": 67,
+        "startState": "{\"x\":4.3800268102423,\"y\":35.500330605,\"scale\":0.004817010066798382,\"width\":1181,\"height\":646,\"isGis\":true}",
+        "endState": {
+          "x": -51.5184106897577,
+          "y": 26.008143105000002,
+          "scale": 0.004817010066798382,
+          "width": 1181,
+          "height": 646,
+          "isGis": true
+        }
+      },
+      "panSummary": {
+        "count": 68,
+        "windowSeconds": 6.658699999988079,
+        "fps": 11.020824420696707,
+        "pointCount": 75495994,
+        "downsampleRatio": 1,
+        "cpu": {
+          "count": 68,
+          "meanMs": 0.1132352932849351,
+          "p50Ms": 0.09999999403953552,
+          "p95Ms": 0.20000000298023224,
+          "p99Ms": 0.20000000298023224,
+          "maxMs": 0.20000000298023224
+        },
+        "interval": {
+          "count": 67,
+          "meanMs": 90.73731345561013,
+          "p50Ms": 93.69999694824219,
+          "p95Ms": 98.0999984741211,
+          "p99Ms": 104.5999984741211,
+          "maxMs": 104.5999984741211
+        },
+        "gpu": {
+          "count": 68,
+          "meanMs": 367.1058824202594,
+          "p50Ms": 373.6000061035156,
+          "p95Ms": 389,
+          "p99Ms": 390.70001220703125,
+          "maxMs": 390.70001220703125
+        }
+      }
+    },
+    {
+      "config": {
+        "tag": "cap-200k",
+        "query": "perf=1&downsampleMax=200000&densityWeight=0",
+        "description": "200k cap, uniform"
+      },
+      "dragInfo": {
+        "svgFound": true,
+        "svgTagName": "svg",
+        "downTargetRect": {
+          "x": 6.5,
+          "y": 41,
+          "w": 1181,
+          "h": 646
+        },
+        "movesFired": 66,
+        "viewportChanges": 66,
+        "startState": "{\"x\":4.3800268102423,\"y\":35.500330605,\"scale\":0.004817010066798382,\"width\":1181,\"height\":646,\"isGis\":true}",
+        "endState": {
+          "x": -43.0809106897577,
+          "y": 4.211268105000002,
+          "scale": 0.004817010066798382,
+          "width": 1181,
+          "height": 646,
+          "isGis": true
+        }
+      },
+      "panSummary": {
+        "count": 67,
+        "windowSeconds": 6.62579999999702,
+        "fps": 10.911796341523345,
+        "pointCount": 75495994,
+        "downsampleRatio": 1,
+        "cpu": {
+          "count": 67,
+          "meanMs": 0.10746268505480752,
+          "p50Ms": 0.09999999403953552,
+          "p95Ms": 0.20000000298023224,
+          "p99Ms": 0.20000000298023224,
+          "maxMs": 0.20000000298023224
+        },
+        "interval": {
+          "count": 66,
+          "meanMs": 91.64393915552081,
+          "p50Ms": 95.5,
+          "p95Ms": 97.19999694824219,
+          "p99Ms": 99.5999984741211,
+          "maxMs": 99.5999984741211
+        },
+        "gpu": {
+          "count": 67,
+          "meanMs": 373.76268608890365,
+          "p50Ms": 381.79998779296875,
+          "p95Ms": 385.3999938964844,
+          "p99Ms": 387.8999938964844,
+          "maxMs": 387.8999938964844
+        }
+      }
+    },
+    {
+      "config": {
+        "tag": "cap-500k",
+        "query": "perf=1&downsampleMax=500000&densityWeight=0",
+        "description": "500k cap, uniform"
+      },
+      "dragInfo": {
+        "svgFound": true,
+        "svgTagName": "svg",
+        "downTargetRect": {
+          "x": 6.5,
+          "y": 41,
+          "w": 1181,
+          "h": 646
+        },
+        "movesFired": 62,
+        "viewportChanges": 62,
+        "startState": "{\"x\":4.3800268102423,\"y\":35.500330605,\"scale\":0.004817010066798382,\"width\":1181,\"height\":646,\"isGis\":true}",
+        "endState": {
+          "x": -38.8621606897577,
+          "y": -1.413731894999998,
+          "scale": 0.004817010066798382,
+          "width": 1181,
+          "height": 646,
+          "isGis": true
+        }
+      },
+      "panSummary": {
+        "count": 63,
+        "windowSeconds": 6.617300000011921,
+        "fps": 10.260144345741837,
+        "pointCount": 75495994,
+        "downsampleRatio": 1,
+        "cpu": {
+          "count": 63,
+          "meanMs": 0.08888888879427834,
+          "p50Ms": 0.09999999403953552,
+          "p95Ms": 0.20000000298023224,
+          "p99Ms": 0.20000000298023224,
+          "maxMs": 0.20000000298023224
+        },
+        "interval": {
+          "count": 62,
+          "meanMs": 97.46451573218069,
+          "p50Ms": 100.4000015258789,
+          "p95Ms": 107.0999984741211,
+          "p99Ms": 111.69999694824219,
+          "maxMs": 111.69999694824219
+        },
+        "gpu": {
+          "count": 63,
+          "meanMs": 397.968253726051,
+          "p50Ms": 404.29998779296875,
+          "p95Ms": 421.29998779296875,
+          "p99Ms": 426.1000061035156,
+          "maxMs": 426.1000061035156
+        }
+      }
+    },
+    {
+      "config": {
+        "tag": "cap-2M",
+        "query": "perf=1&downsampleMax=2000000&densityWeight=0",
+        "description": "2M cap, uniform"
+      },
+      "dragInfo": {
+        "svgFound": true,
+        "svgTagName": "svg",
+        "downTargetRect": {
+          "x": 6.5,
+          "y": 41,
+          "w": 1181,
+          "h": 646
+        },
+        "movesFired": 47,
+        "viewportChanges": 47,
+        "startState": "{\"x\":4.3800268102423,\"y\":35.500330605,\"scale\":0.004817010066798382,\"width\":1181,\"height\":646,\"isGis\":true}",
+        "endState": {
+          "x": -49.4090356897577,
+          "y": 17.922205605000002,
+          "scale": 0.004817010066798382,
+          "width": 1181,
+          "height": 646,
+          "isGis": true
+        }
+      },
+      "panSummary": {
+        "count": 48,
+        "windowSeconds": 6.67659999999404,
+        "fps": 7.685263893181701,
+        "pointCount": 75495994,
+        "downsampleRatio": 1,
+        "cpu": {
+          "count": 48,
+          "meanMs": 0.1125000004346172,
+          "p50Ms": 0.10000000894069672,
+          "p95Ms": 0.20000000298023224,
+          "p99Ms": 0.20000000298023224,
+          "maxMs": 0.20000000298023224
+        },
+        "interval": {
+          "count": 47,
+          "meanMs": 130.11914930952355,
+          "p50Ms": 135.8000030517578,
+          "p95Ms": 159.10000610351562,
+          "p99Ms": 164.3000030517578,
+          "maxMs": 164.3000030517578
+        },
+        "gpu": {
+          "count": 48,
+          "meanMs": 526.7041654586792,
+          "p50Ms": 551.2999877929688,
+          "p95Ms": 589.4000244140625,
+          "p99Ms": 590.5999755859375,
+          "maxMs": 590.5999755859375
+        }
+      }
+    },
+    {
+      "config": {
+        "tag": "cap-10M",
+        "query": "perf=1&downsampleMax=10000000&densityWeight=0",
+        "description": "10M cap, uniform"
+      },
+      "dragInfo": {
+        "svgFound": true,
+        "svgTagName": "svg",
+        "downTargetRect": {
+          "x": 6.5,
+          "y": 41,
+          "w": 1181,
+          "h": 646
+        },
+        "movesFired": 17,
+        "viewportChanges": 17,
+        "startState": "{\"x\":4.3800268102423,\"y\":35.500330605,\"scale\":0.004817010066798382,\"width\":1181,\"height\":646,\"isGis\":true}",
+        "endState": {
+          "x": -40.2684106897577,
+          "y": 0.34408060500000204,
+          "scale": 0.004817010066798382,
+          "width": 1181,
+          "height": 646,
+          "isGis": true
+        }
+      },
+      "panSummary": {
+        "count": 18,
+        "windowSeconds": 6.94620000000298,
+        "fps": 2.659408059513949,
+        "pointCount": 75495994,
+        "downsampleRatio": 1,
+        "cpu": {
+          "count": 18,
+          "meanMs": 0.10555555588669246,
+          "p50Ms": 0.09999999403953552,
+          "p95Ms": 0.20000000298023224,
+          "p99Ms": 0.20000000298023224,
+          "maxMs": 0.20000000298023224
+        },
+        "interval": {
+          "count": 17,
+          "meanMs": 376.0235276502722,
+          "p50Ms": 428.8999938964844,
+          "p95Ms": 598,
+          "p99Ms": 598,
+          "maxMs": 598
+        },
+        "gpu": {
+          "count": 15,
+          "meanMs": 1612.9266560872395,
+          "p50Ms": 1787.9000244140625,
+          "p95Ms": 1935.0999755859375,
+          "p99Ms": 1935.0999755859375,
+          "maxMs": 1935.0999755859375
+        }
+      }
+    }
+  ]
+}

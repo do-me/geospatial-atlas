@@ -1,0 +1,106 @@
+{
+  "parquet": "/Users/dome/work/overture/places_data/places_simplified.parquet",
+  "loadDurationMs": 22278,
+  "gpu": {
+    "ok": true,
+    "maxBufferSize": 4294967292,
+    "maxStorageBufferBindingSize": 4294967292,
+    "maxComputeWorkgroupStorageSize": 32768,
+    "adapterInfo": {
+      "vendor": "apple",
+      "architecture": "metal-3",
+      "device": "",
+      "description": ""
+    },
+    "features": [
+      "depth32float-stencil8",
+      "chromium-experimental-subgroup-matrix",
+      "rg11b10ufloat-renderable",
+      "texture-formats-tier1",
+      "bgra8unorm-storage",
+      "texture-compression-bc",
+      "dual-source-blending",
+      "core-features-and-limits",
+      "float32-filterable",
+      "indirect-first-instance",
+      "texture-compression-astc-sliced-3d",
+      "float32-blendable",
+      "texture-compression-astc",
+      "texture-compression-etc2",
+      "depth-clip-control",
+      "texture-compression-bc-sliced-3d",
+      "clip-distances",
+      "timestamp-query",
+      "texture-formats-tier2",
+      "shader-f16",
+      "primitive-index",
+      "texture-component-swizzle",
+      "subgroups"
+    ]
+  },
+  "cold": {
+    "count": 6,
+    "windowSeconds": 19.27220000000298,
+    "fps": 0.2599982321771397,
+    "pointCount": 75495994,
+    "downsampleRatio": 0.3333333333333333,
+    "cpu": {
+      "count": 6,
+      "meanMs": 85.76666665822268,
+      "p50Ms": 1.2999999523162842,
+      "p95Ms": 259.6000061035156,
+      "p99Ms": 259.6000061035156,
+      "maxMs": 259.6000061035156
+    },
+    "interval": {
+      "count": 5,
+      "meanMs": 3846.1799975574017,
+      "p50Ms": 259.79998779296875,
+      "p95Ms": 14680.5,
+      "p99Ms": 14680.5,
+      "maxMs": 14680.5
+    },
+    "gpu": {
+      "count": 4,
+      "meanMs": 10.275000095367432,
+      "p50Ms": 13.600000381469727,
+      "p95Ms": 14.699999809265137,
+      "p99Ms": 14.699999809265137,
+      "maxMs": 14.699999809265137
+    }
+  },
+  "pan": {
+    "count": 44,
+    "windowSeconds": 8.691800000011922,
+    "fps": 5.289117915315644,
+    "pointCount": 75495994,
+    "downsampleRatio": 1,
+    "cpu": {
+      "count": 44,
+      "meanMs": 0.08636363595724106,
+      "p50Ms": 0.09999999403953552,
+      "p95Ms": 0.20000000298023224,
+      "p99Ms": 0.20000000298023224,
+      "maxMs": 0.20000000298023224
+    },
+    "interval": {
+      "count": 43,
+      "meanMs": 189.0674430048743,
+      "p50Ms": 174.39999389648438,
+      "p95Ms": 270.20001220703125,
+      "p99Ms": 646.4000244140625,
+      "maxMs": 646.4000244140625
+    },
+    "gpu": {
+      "count": 43,
+      "meanMs": 763.4930235396984,
+      "p50Ms": 696.4000244140625,
+      "p95Ms": 1100.5,
+      "p99Ms": 1263.9000244140625,
+      "maxMs": 1263.9000244140625
+    }
+  },
+  "panSeconds": 8,
+  "timestamp": "2026-04-20T22:55:05.690Z",
+  "gitHead": null
+}

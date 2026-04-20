@@ -1,0 +1,68 @@
+{
+  "parquet": "/Users/dome/work/overture/places_data/places_simplified.parquet",
+  "loadDurationMs": 21998,
+  "gpu": {
+    "ok": true,
+    "maxBufferSize": 4294967292,
+    "maxStorageBufferBindingSize": 4294967292,
+    "maxComputeWorkgroupStorageSize": 32768,
+    "adapterInfo": {
+      "vendor": "apple",
+      "architecture": "metal-3",
+      "device": "",
+      "description": ""
+    },
+    "features": [
+      "depth32float-stencil8",
+      "chromium-experimental-subgroup-matrix",
+      "rg11b10ufloat-renderable",
+      "bgra8unorm-storage",
+      "texture-formats-tier1",
+      "texture-compression-bc",
+      "dual-source-blending",
+      "core-features-and-limits",
+      "float32-filterable",
+      "indirect-first-instance",
+      "texture-compression-astc-sliced-3d",
+      "float32-blendable",
+      "texture-compression-astc",
+      "texture-compression-etc2",
+      "depth-clip-control",
+      "texture-compression-bc-sliced-3d",
+      "clip-distances",
+      "timestamp-query",
+      "texture-formats-tier2",
+      "shader-f16",
+      "primitive-index",
+      "texture-component-swizzle",
+      "subgroups"
+    ]
+  },
+  "cold": {
+    "count": 6,
+    "windowSeconds": 19.02639999999106,
+    "fps": 0.31535130134985173,
+    "meanMs": 85.21666615456343,
+    "p50Ms": 1.2999999523162842,
+    "p95Ms": 260,
+    "p99Ms": 260,
+    "maxMs": 260,
+    "pointCount": 75495994,
+    "downsampleRatio": 0.3333333333333333
+  },
+  "pan": {
+    "count": 44,
+    "windowSeconds": 8.55940000000596,
+    "fps": 5.14054723461567,
+    "meanMs": 0.0931818156757138,
+    "p50Ms": 0.09999999403953552,
+    "p95Ms": 0.20000000298023224,
+    "p99Ms": 0.20000000298023224,
+    "maxMs": 0.20000000298023224,
+    "pointCount": 75495994,
+    "downsampleRatio": 1
+  },
+  "panSeconds": 8,
+  "timestamp": "2026-04-20T22:50:55.504Z",
+  "gitHead": null
+}
