@@ -45,6 +45,29 @@ export default defineConfig({
       testMatch: "gis-detection.spec.ts",
       use: { browserName: "chromium" },
     },
+    {
+      // Real-Chrome project for the perf benchmark (default Chromium build
+      // does not ship the WebGPU pipeline cache that Atlas relies on).
+      // Drive only when you set PERF_PARQUET_FILE — the spec early-skips
+      // otherwise so this project is safe to leave in the default list.
+      name: "perf-chrome",
+      testMatch: "perf-75m.spec.ts",
+      timeout: 20 * 60 * 1000,
+      use: {
+        channel: "chrome",
+        launchOptions: {
+          args: [
+            "--enable-unsafe-webgpu",
+            "--enable-features=Vulkan,UseSkiaRenderer",
+            "--ignore-gpu-blocklist",
+            "--enable-gpu-rasterization",
+            "--use-angle=metal",
+            "--js-flags=--max-old-space-size=8192",
+          ],
+        },
+        viewport: { width: 1600, height: 1000 },
+      },
+    },
   ],
 });
 

@@ -37,4 +37,4 @@ lerna-debug.log*
 e2e/.data/
 e2e/test-results/
 e2e/playwright-report/
-test-results/
+test-results/e2e/perf-results/

@@ -63,11 +63,21 @@ struct FragmentOutput {
 @group(3) @binding(0) var<uniform> downsample_uniforms: DownsampleUniforms;
 @group(3) @binding(1) var<storage, read_write> downsample_counters: array<atomic<u32>>; // [visible_count, max_density_fixed]
 @group(3) @binding(2) var<storage, read_write> point_data: array<f32>; // density (>= 0 means visible with density, < 0 means not visible or not accepted)
+// Compaction outputs: a tight list of accepted point indices, plus a 16-byte
+// indirect-draw args buffer ([vertexCount, instanceCount, firstVertex, firstInstance]).
+// Only `instanceCount` (slot 1) is mutated by the compact_accepted pass via
+// atomicAdd; the other slots are pre-initialized on the host.
+@group(3) @binding(3) var<storage, read_write> compact_indices: array<u32>;
+@group(3) @binding(4) var<storage, read_write> indirect_args: array<atomic<u32>>;
 
 // Separate binding for vertex shader in downsampled draw pipeline
 // Uses group 2 since the pipeline only needs groups 0, 1, 2
 // (read-only access required by WebGPU for vertex shaders)
 @group(2) @binding(0) var<storage, read> point_data_read: array<f32>; // same as point_data above
+// Compaction read view used by the indirect-draw vertex shader.
+// Bound to a different bind group than point_data_read so the two draw paths
+// can share group2 binding0 without conflicting.
+@group(2) @binding(1) var<storage, read> compact_indices_read: array<u32>;
 
 fn get_point(index: u32) -> PointData {
   var result: PointData;
@@ -526,6 +536,85 @@ fn points_downsampled_vs(
   let dp = vec2<f32>(f32(part % 2), f32(part / 2)) * 2.0 - 1.0;
   let point = get_point(instance);
   let pos = uniforms.matrix * point.position;
+  out.position = vec4<f32>(pos.xy + dp * uniforms.point_size / framebuffer_size * 2.0, 0.0, 1.0);
+  out.dp = vec3(dp, uniforms.point_size);
+  out.color = uniforms.category_colors[point.category] * alpha;
+  return out;
+}
+
+// =====================================================
+// Compaction pass: build a tight list of accepted indices
+// =====================================================
+// Read point_data and, for each accepted point (>= 0), atomically reserve
+// a slot in compact_indices and write the *original* point index there.
+// Also bumps indirect_args[1] (instanceCount) so a subsequent drawIndirect
+// pass renders exactly accepted_count instances. The render_limit guard
+// handles the case where density_sample over-accepts in low-density
+// viewports: extra hits are dropped on the floor instead of overflowing
+// the buffer.
+
+// Workgroup-level reduction: each workgroup tallies its accepted count
+// in shared memory, then a SINGLE thread does ONE global atomicAdd to
+// reserve a contiguous range of slots. This collapses the serialization
+// hotspot from N atomics on indirect_args[1] (millions when cap is large)
+// to N/workgroup_size atomics — typically 100x-300x fewer.
+var<workgroup> wg_local_count: atomic<u32>;
+var<workgroup> wg_base: u32;
+
+@compute @workgroup_size(256)
+fn compact_accepted(
+  @builtin(global_invocation_id) id: vec3<u32>,
+  @builtin(local_invocation_index) lid: u32,
+) {
+  if (lid == 0u) {
+    atomicStore(&wg_local_count, 0u);
+  }
+  workgroupBarrier();
+
+  let index = id.y * DOWNSAMPLE_STRIDE + id.x;
+  let in_range = index < uniforms.count;
+  let accepted = in_range && (point_data[index] >= 0.0);
+
+  var local_slot: u32 = 0u;
+  if (accepted) {
+    local_slot = atomicAdd(&wg_local_count, 1u);
+  }
+  workgroupBarrier();
+
+  if (lid == 0u) {
+    let total = atomicLoad(&wg_local_count);
+    wg_base = atomicAdd(&indirect_args[1], total);
+  }
+  workgroupBarrier();
+
+  if (accepted) {
+    let global_slot = wg_base + local_slot;
+    if (global_slot < downsample_uniforms.render_limit) {
+      compact_indices[global_slot] = index;
+    }
+  }
+}
+
+// =====================================================
+// Draw compacted points (indirect-draw target)
+// =====================================================
+// Reads from the tight compact_indices list — instance_index ranges from 0
+// to accepted_count - 1 instead of 0 to total_count - 1, so the vertex
+// shader runs only for accepted points. This is the win against the
+// 75M-instance vertex iteration that bottlenecks downsampled draws.
+
+@vertex
+fn points_compacted_vs(
+  @builtin(instance_index) instance: u32,
+  @builtin(vertex_index) part: u32,
+) -> PointsVertexOutput {
+  let real_index = compact_indices_read[instance];
+  let framebuffer_size = vec2(f32(uniforms.framebuffer_width), f32(uniforms.framebuffer_height));
+  let alpha = uniforms.point_alpha * uniforms.points_alpha;
+  let dp = vec2<f32>(f32(part % 2), f32(part / 2)) * 2.0 - 1.0;
+  let point = get_point(real_index);
+  let pos = uniforms.matrix * point.position;
+  var out: PointsVertexOutput;
   out.position = vec4<f32>(pos.xy + dp * uniforms.point_size / framebuffer_size * 2.0, 0.0, 1.0);
   out.dp = vec3(dp, uniforms.point_size);
   out.color = uniforms.category_colors[point.category] * alpha;

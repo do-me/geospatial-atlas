@@ -25,12 +25,19 @@ export interface DownsampleResources {
   uniformBuffer: Node<GPUBuffer>;
   countersBuffer: Node<GPUBuffer>;
   pointDataBuffer: Node<GPUBuffer>;
+  // Compaction outputs — populated by the compact_accepted compute pass and
+  // consumed by the indirect-draw vertex pipeline.
+  compactIndicesBuffer: Node<GPUBuffer>;
+  indirectArgsBuffer: Node<GPUBuffer>;
   // Group 3: for compute shaders (read_write access)
   bindGroupLayout: Node<GPUBindGroupLayout>;
   bindGroup: Node<GPUBindGroup>;
   // Group 2 in indexed draw pipeline: for vertex shader (read-only access to index buffer)
   vertexBindGroupLayout: Node<GPUBindGroupLayout>;
   vertexBindGroup: Node<GPUBindGroup>;
+  // Group 2 in compacted draw pipeline: vertex reads compact_indices_read.
+  compactedVertexBindGroupLayout: Node<GPUBindGroupLayout>;
+  compactedVertexBindGroup: Node<GPUBindGroup>;
 }
 
 export interface DownsampleConfig {
@@ -61,28 +68,52 @@ export function makeDownsampleResources(
   const pointBufferSize = df.derive([count], (c) => Math.max(4, c * 4));
   const pointDataBuffer = df.statefulDerive([device, pointBufferSize, GPUBufferUsage.STORAGE], gpuBuffer);
 
+  // Compaction targets. compact_indices is sized for the maximum acceptable
+  // points so the over-accept guard in the shader cannot overflow it.
+  // indirect_args is the 16-byte drawIndirect descriptor; we re-zero
+  // instanceCount each frame and the compact_accepted shader fills it.
+  const compactBufferSize = df.derive(
+    [count, downsampleMaxPoints],
+    (c, m) => Math.max(4, Math.min(c, m ?? c) * 4),
+  );
+  const compactIndicesBuffer = df.statefulDerive(
+    [device, compactBufferSize, GPUBufferUsage.STORAGE],
+    gpuBuffer,
+  );
+  const indirectArgsBuffer = df.statefulDerive(
+    [device, df.value(16), GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST],
+    gpuBuffer,
+  );
+
   // Bind group layout for group 3 (compute shaders - read_write access)
-  // 4 bindings: uniform + 3 storage buffers (removed prefix_sum, now use atomic counter)
+  // Adds bindings 3 (compact_indices) and 4 (indirect_args) to host the
+  // compaction outputs for compact_accepted. viewport_cull / density_sample
+  // also bind this layout but never touch the new bindings, so the extra
+  // entries are inert for them.
   const bindGroupLayout = df.derive([device], (device) =>
     device.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
         { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // counters
         { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // point_data
+        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // compact_indices
+        { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // indirect_args
       ],
     }),
   );
 
   // Bind group for group 3 (compute)
   const bindGroup = df.derive(
-    [device, bindGroupLayout, uniformBuffer, countersBuffer, pointDataBuffer],
-    (device, layout, uniform, counters, pointData) =>
+    [device, bindGroupLayout, uniformBuffer, countersBuffer, pointDataBuffer, compactIndicesBuffer, indirectArgsBuffer],
+    (device, layout, uniform, counters, pointData, compact, indirect) =>
       device.createBindGroup({
         layout,
         entries: [
           { binding: 0, resource: { buffer: uniform } },
           { binding: 1, resource: { buffer: counters } },
           { binding: 2, resource: { buffer: pointData } },
+          { binding: 3, resource: { buffer: compact } },
+          { binding: 4, resource: { buffer: indirect } },
         ],
       }),
   );
@@ -102,14 +133,35 @@ export function makeDownsampleResources(
     }),
   );
 
+  // Compacted draw pipeline group 2: a single read-only binding (binding 1) for
+  // compact_indices_read. Distinct from vertexBindGroupLayout so the two draw
+  // paths can coexist with their own pipeline layouts.
+  const compactedVertexBindGroupLayout = df.derive([device], (device) =>
+    device.createBindGroupLayout({
+      entries: [{ binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } }],
+    }),
+  );
+  const compactedVertexBindGroup = df.derive(
+    [device, compactedVertexBindGroupLayout, compactIndicesBuffer],
+    (device, layout, buffer) =>
+      device.createBindGroup({
+        layout,
+        entries: [{ binding: 1, resource: { buffer } }],
+      }),
+  );
+
   return {
     uniformBuffer,
     countersBuffer,
     pointDataBuffer,
+    compactIndicesBuffer,
+    indirectArgsBuffer,
     bindGroupLayout,
     bindGroup,
     vertexBindGroupLayout,
     vertexBindGroup,
+    compactedVertexBindGroupLayout,
+    compactedVertexBindGroup,
   };
 }
 
@@ -170,11 +222,23 @@ export function makeDownsampleCommand(
       }),
   );
 
+  // compact_accepted reads point_data and writes to compact_indices + indirect_args.
+  // No blur_buffer or x/y/category data needed.
+  const compactPipeline = df.derive(
+    [device, module, group0Layout, group1Layout, emptyLayout, downsampleResources.bindGroupLayout],
+    (device, module, group0, group1, empty, group3) =>
+      device.createComputePipeline({
+        layout: device.createPipelineLayout({ bindGroupLayouts: [group0, group1, empty, group3] }),
+        compute: { module, entryPoint: "compact_accepted" },
+      }),
+  );
+
   return df.derive(
     [
       device,
       viewportCullPipeline,
       densitySamplePipeline,
+      compactPipeline,
       group0,
       group1,
       blurOnlyBindGroup,
@@ -182,12 +246,14 @@ export function makeDownsampleCommand(
       downsampleResources.bindGroup,
       downsampleResources.uniformBuffer,
       downsampleResources.countersBuffer,
+      downsampleResources.indirectArgsBuffer,
       dataBuffers.count,
     ],
     (
       device,
       viewportCullPipeline,
       densitySamplePipeline,
+      compactPipeline,
       group0,
       group1,
       group2Blur,
@@ -195,6 +261,7 @@ export function makeDownsampleCommand(
       group3,
       uniformBuffer,
       countersBuffer,
+      indirectArgsBuffer,
       count,
     ) =>
       (encoder, config) => {
@@ -213,6 +280,10 @@ export function makeDownsampleCommand(
 
         // Clear counters
         encoder.clearBuffer(countersBuffer);
+        // Reset indirect args to [vertexCount=4, instanceCount=0, firstVertex=0, firstInstance=0].
+        // The 4 is required because every accepted point expands to a 4-vertex triangle strip.
+        const initIndirect = new Uint32Array([4, 0, 0, 0]);
+        device.queue.writeBuffer(indirectArgsBuffer, 0, initIndirect);
 
         const [workgroupsX, workgroupsY] = computeDispatch(count);
 
@@ -234,6 +305,22 @@ export function makeDownsampleCommand(
         {
           const pass = encoder.beginComputePass();
           pass.setPipeline(densitySamplePipeline);
+          pass.setBindGroup(0, group0);
+          pass.setBindGroup(1, group1);
+          pass.setBindGroup(2, emptyGroup);
+          pass.setBindGroup(3, group3);
+          pass.dispatchWorkgroups(workgroupsX, workgroupsY);
+          pass.end();
+        }
+
+        // Pass 3: Compaction. Reads point_data, writes accepted indices to
+        // compact_indices, and increments indirect_args[1] (instanceCount).
+        // The followup drawIndirect then iterates only accepted instances —
+        // the whole point of this pipeline. Disabling this pass makes the
+        // downstream draw fall back to an instanceCount of 0 (no points).
+        {
+          const pass = encoder.beginComputePass();
+          pass.setPipeline(compactPipeline);
           pass.setBindGroup(0, group0);
           pass.setBindGroup(1, group1);
           pass.setBindGroup(2, emptyGroup);

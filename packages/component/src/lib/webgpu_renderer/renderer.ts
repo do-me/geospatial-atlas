@@ -20,7 +20,7 @@ import { makeAccumulateCommand } from "./accumulate.js";
 import { makeBindGroups } from "./bind_groups.js";
 import { makeDownsampleCommand, makeDownsampleResources, type DownsampleConfig } from "./downsample.js";
 import { makeDrawDensityMapCommand } from "./draw_density_map.js";
-import { makeDrawPointsCommand, makeDrawPointsDownsampledCommand } from "./draw_points.js";
+import { makeDrawPointsCommand, makeDrawPointsCompactedCommand, makeDrawPointsDownsampledCommand } from "./draw_points.js";
 import { makeGammaCorrectionCommand } from "./gamma_correction.js";
 import { makeGaussianBlurCommand } from "./gaussian_blur.js";
 import { kdeConfig } from "./kde_config.js";
@@ -29,6 +29,7 @@ import programCode from "./program.wgsl?raw";
 
 export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
   readonly props: EmbeddingRendererProps;
+  readonly gpuDevice: GPUDevice;
 
   private viewport: Viewport;
   private df: Dataflow;
@@ -42,6 +43,7 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
 
   constructor(context: GPUCanvasContext, device: GPUDevice, format: GPUTextureFormat, width: number, height: number) {
     this.context = context;
+    this.gpuDevice = device;
 
     this.props = {
       mode: "points",
@@ -326,6 +328,14 @@ function makeRenderCommand(
     downsampleResources,
     auxiliaryResources,
   );
+  let drawPointsCompacted = makeDrawPointsCompactedCommand(
+    df,
+    device,
+    module,
+    bindGroups,
+    downsampleResources,
+    auxiliaryResources,
+  );
   let drawDensityMap = makeDrawDensityMapCommand(df, device, module, bindGroups, auxiliaryResources);
   let gammaCorrection = makeGammaCorrectionCommand(df, device, module, format, bindGroups);
   let gaussianBlur = makeGaussianBlurCommand(df, device, module, bindGroups, fbWidth, fbHeight, inputs.categoryCount);
@@ -372,6 +382,7 @@ function makeRenderCommand(
       categoryColors,
       drawPoints,
       drawPointsDownsampled,
+      drawPointsCompacted,
       gammaCorrection,
       accumulate,
       gaussianBlur,
@@ -391,6 +402,7 @@ function makeRenderCommand(
       categoryColors,
       drawPoints,
       drawPointsDownsampled,
+      drawPointsCompacted,
       gammaCorrection,
       accumulate,
       gaussianBlur,
@@ -440,30 +452,46 @@ function makeRenderCommand(
         const useDownsampling = effectiveMaxPoints !== null && count > effectiveMaxPoints;
 
         if (useDownsampling) {
-          // First, compute density for all points (needed for density-based sampling)
-          accumulate(encoder);
-          gaussianBlur(encoder);
+          // The accumulate + blur passes touch every input point with atomic
+          // adds against the density grid — at 75M points this dominates the
+          // frame. They are only required if the downsample shader actually
+          // reads density to bias sampling (densityWeight > 0) OR if we're
+          // about to draw the density overlay. When density weighting is off
+          // we can skip them entirely; downsample falls back to uniform random
+          // sampling because (a) downsampleConfig.densityWeight = 0 cancels
+          // the inverse-weight term and (b) blur_buffer's stale contents only
+          // ever feed that term, so they don't matter.
+          const wantsDensityOverlay =
+            props.mode == "density" && (props.densityAlpha > 0 || props.contoursAlpha > 0);
+          const wantsDensityWeighting = props.downsampleDensityWeight > 0;
+          if (wantsDensityWeighting || wantsDensityOverlay) {
+            accumulate(encoder);
+            gaussianBlur(encoder);
+          }
 
           // Run downsampling pipeline with fixed seed for deterministic sampling
           // Using 42 ensures the same points are always accepted/rejected
           // Viewport culling handles which points are visible
           const downsampleConfig: DownsampleConfig = {
             maxPoints: effectiveMaxPoints!,
-            densityWeight: props.downsampleDensityWeight,
+            densityWeight: wantsDensityWeighting ? props.downsampleDensityWeight : 0,
             frameSeed: 42,
           };
 
-          // Perform downsample, this fills the point_data buffer.
+          // Perform downsample. This now also runs the compact_accepted pass
+          // which populates compact_indices + indirect_args[1] so the
+          // followup drawPointsCompacted only iterates accepted instances.
           downsample(encoder, downsampleConfig);
 
-          // Draw downsampled points
-          drawPointsDownsampled(encoder, count);
+          // Draw accepted points via indirect draw — vertex shader runs
+          // for ~maxPoints instances instead of `count`. This collapses the
+          // 75M-instance vertex iteration that capped frame time at ~89ms
+          // even when nearly every instance was rejected by density_sample.
+          drawPointsCompacted(encoder);
 
           // If in density mode, also draw density overlay (using all points, already computed)
-          if (props.mode == "density") {
-            if (props.densityAlpha > 0 || props.contoursAlpha > 0) {
-              drawDensityMap(encoder);
-            }
+          if (wantsDensityOverlay) {
+            drawDensityMap(encoder);
           }
         } else {
           // No downsampling needed - use original path

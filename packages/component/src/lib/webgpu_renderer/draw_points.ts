@@ -63,6 +63,76 @@ export function makeDrawPointsCommand(
 }
 
 /**
+ * Draw points using a compact index buffer + indirect-draw, so the vertex
+ * shader runs only for accepted points (instead of iterating every point in
+ * the dataset). Reads compact_indices_read from a dedicated bind group;
+ * instanceCount comes from indirect_args[1] which compact_accepted populates.
+ *
+ * This is the win against the 75M-instance vertex iteration that bottlenecks
+ * the original drawPointsDownsampled at very large datasets.
+ */
+export function makeDrawPointsCompactedCommand(
+  df: Dataflow,
+  device: Node<GPUDevice>,
+  module: Node<GPUShaderModule>,
+  bindGroups: BindGroups,
+  downsampleResources: DownsampleResources,
+  auxiliaryResources: AuxiliaryResources,
+): Node<(encoder: GPUCommandEncoder) => void> {
+  const pipeline = df.derive(
+    [device, module, bindGroups.layouts, downsampleResources.compactedVertexBindGroupLayout],
+    (device, module, layouts, group2Layout) =>
+      device.createRenderPipeline({
+        layout: device.createPipelineLayout({
+          bindGroupLayouts: [layouts.group0, layouts.group1, group2Layout],
+        }),
+        vertex: { entryPoint: "points_compacted_vs", module: module },
+        fragment: {
+          entryPoint: "points_fs",
+          module: module,
+          targets: [
+            {
+              format: auxiliaryResources.colorTextureFormat,
+              blend: { color: { srcFactor: "one", dstFactor: "one" }, alpha: { srcFactor: "one", dstFactor: "one" } },
+            },
+            {
+              format: auxiliaryResources.alphaTextureFormat,
+              blend: { color: { srcFactor: "one", dstFactor: "one" }, alpha: { srcFactor: "one", dstFactor: "one" } },
+            },
+          ],
+        },
+        primitive: { topology: "triangle-strip" },
+      }),
+  );
+
+  return df.derive(
+    [
+      pipeline,
+      bindGroups.group0,
+      bindGroups.group1,
+      downsampleResources.compactedVertexBindGroup,
+      downsampleResources.indirectArgsBuffer,
+      auxiliaryResources.colorTexture,
+      auxiliaryResources.alphaTexture,
+    ],
+    (pipeline, group0, group1, group2, indirectArgs, colorTexture, alphaTexture) => (encoder) => {
+      let pass = encoder.beginRenderPass({
+        colorAttachments: [
+          { clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store", view: colorTexture.createView() },
+          { clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store", view: alphaTexture.createView() },
+        ],
+      });
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, group0);
+      pass.setBindGroup(1, group1);
+      pass.setBindGroup(2, group2);
+      pass.drawIndirect(indirectArgs, 0);
+      pass.end();
+    },
+  );
+}
+
+/**
  * Draw points using an index buffer for downsampled rendering.
  * Uses points_downsampled_vs vertex shader that reads point indices from the index buffer.
  * Note: Uses group 2 for the vertex shader (read-only index buffer access).

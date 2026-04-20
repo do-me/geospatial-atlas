@@ -107,6 +107,7 @@
 
   import { defaultCategoryColors } from "../colors.js";
   import type { EmbeddingRenderer } from "../renderer_interface.js";
+  import { isPerfEnabled, record as perfRecord, setPointCount as perfSetPointCount } from "./perf_recorder.js";
   import {
     cacheKeyForObject,
     deepEquals,
@@ -273,11 +274,14 @@
   let map: maplibregl.Map | undefined = $state();
 
   let minimumDensity = $derived(config?.minimumDensity ?? 1 / 16);
-  let userPointSize = $derived(config?.pointSize ?? null);
-  let mode = $derived(config?.mode ?? "points");
+  // Allow URL params (?downsampleMax=, ?densityWeight=, ?pointSize=) to override
+  // the spec for ad-hoc perf experiments without rebuilding.
+  let perfOverrides = (typeof window !== "undefined" ? (window as any).__atlasPerfOverrides : null) ?? null;
+  let userPointSize = $derived(perfOverrides?.pointSize ?? config?.pointSize ?? null);
+  let mode = $derived(perfOverrides?.renderMode ?? config?.mode ?? "points");
   let autoLabelEnabled = $derived(config?.autoLabelEnabled);
-  let downsampleMaxPoints = $derived(config?.downsampleMaxPoints ?? 4000000);
-  let downsampleDensityWeight = $derived(config?.downsampleDensityWeight ?? 5);
+  let downsampleMaxPoints = $derived(perfOverrides?.downsampleMaxPoints ?? config?.downsampleMaxPoints ?? 4000000);
+  let downsampleDensityWeight = $derived(perfOverrides?.downsampleDensityWeight ?? config?.downsampleDensityWeight ?? 5);
   let mapStyle = $derived(
     isGis ? (config?.mapStyle !== undefined ? config.mapStyle : "https://tiles.openfreemap.org/styles/liberty") : null,
   );
@@ -348,7 +352,22 @@
     canvas.height = renderer.props.height;
     canvas.style.width = `${renderer.props.width / pixelRatio}px`;
     canvas.style.height = `${renderer.props.height / pixelRatio}px`;
-    renderer.render();
+    if (isPerfEnabled()) {
+      const t0 = performance.now();
+      renderer.render();
+      const dt = performance.now() - t0;
+      const count = renderer.props.x?.length ?? 0;
+      const cap = renderer.props.downsampleMaxPoints;
+      const downsampled = cap != null && Number.isFinite(cap) && cap > 0 && count > cap;
+      perfSetPointCount(count);
+      const dev = (renderer as any).gpuDevice as GPUDevice | undefined;
+      const whenGpuDone = dev
+        ? dev.queue.onSubmittedWorkDone().then(() => performance.now() - t0)
+        : undefined;
+      perfRecord({ cpuMs: dt, downsampled, whenGpuDone });
+    } else {
+      renderer.render();
+    }
   }
 
   let _request: number | null = null;
