@@ -226,6 +226,7 @@
     identifier={context.id}
     x={spec.data.x}
     y={spec.data.y}
+    bounds={spec.data.bounds}
     text={spec.data.text}
     image={spec.data.image}
     importance={spec.data.importance}

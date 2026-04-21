@@ -14,6 +14,9 @@ export interface EmbeddingSpec {
     importance?: string | null;
     category?: string | null;
     isGis?: boolean;
+    /** Axis-aligned bounds for (x, y). When set, the scatter query packs
+     *  coordinates as u16 on the wire — see `EmbeddingViewMosaic`. */
+    bounds?: { x: [number, number]; y: [number, number] } | null;
   };
 
   mode?: "points" | "density";

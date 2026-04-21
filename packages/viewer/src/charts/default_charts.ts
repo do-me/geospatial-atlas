@@ -37,6 +37,7 @@ export async function defaultCharts(options: {
     isGis?: boolean;
     image?: string;
     importance?: string;
+    bounds?: { x: [number, number]; y: [number, number] } | null;
   };
   config?: DefaultChartsConfig;
 }): Promise<BuiltinChartSpec[]> {
@@ -59,6 +60,7 @@ export async function defaultCharts(options: {
         isGis: projection.isGis,
         image: projection.image,
         importance: projection.importance,
+        bounds: projection.bounds,
       },
     };
     if (typeof config.embedding == "object") {

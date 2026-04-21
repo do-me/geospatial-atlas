@@ -28,7 +28,16 @@ export interface EmbeddingAtlasProps {
     id: string;
 
     /** The X and Y columns for the embedding projection view. */
-    projection?: { x: string; y: string; text?: string | null; isGis?: boolean | null } | null;
+    projection?: {
+      x: string;
+      y: string;
+      text?: string | null;
+      isGis?: boolean | null;
+      /** Axis-aligned bounds for (x, y). When present, the main scatter
+       *  query streams coordinates as u16 (roughly half the bytes vs f32).
+       *  The server CLI fills this in for GIS fast-path loads. */
+      bounds?: { x: [number, number]; y: [number, number] } | null;
+    } | null;
 
     /** The column for pre-computed nearest neighbors.
      *  Each value in the column should be a dictionary with the format: `{ "ids": [id1, id2, ...], "distances": [distance1, distance2, ...] }`.

@@ -24,6 +24,12 @@ export interface EmbeddingViewMosaicProps {
   /** The y column name. */
   y: string;
 
+  /** Axis-aligned bounds for (x, y) in data units. If provided, the scatter
+   *  query packs coordinates as u16 on the wire and unpacks to f32 on the
+   *  client — roughly halving the bytes shipped for the main point query.
+   *  Leave unset to stream f32 directly. */
+  bounds?: { x: [number, number]; y: [number, number] } | null;
+
   /** The name of the category column.
    *  The categories should be represented as integers starting from 0.
    *  If you have categories represented as strings, you should first convert them to 0-indexed integers. */

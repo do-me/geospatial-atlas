@@ -369,6 +369,16 @@ def _run_fast_path(
         labels=None,
         is_gis=True,
     )
+    # Attach bbox so the viewer can issue u16-quantised scatter queries —
+    # saves ~44 % of the Arrow wire payload for the main scatter query
+    # (9 B/point → 5 B/point). Only advertised when we actually know the
+    # bbox; the viewer falls back to plain FLOAT when it's missing.
+    if fast_connection.x_bounds is not None and fast_connection.y_bounds is not None:
+        projection = props.setdefault("data", {}).setdefault("projection", {})
+        projection["bounds"] = {
+            "x": list(fast_connection.x_bounds),
+            "y": list(fast_connection.y_bounds),
+        }
     metadata = {"props": props}
     identifier = sha256_hexdigest(
         [__version__, [fast_connection.table], metadata], scope="DataSource"

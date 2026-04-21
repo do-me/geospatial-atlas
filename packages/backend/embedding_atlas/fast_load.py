@@ -41,6 +41,12 @@ class FastLoadResult:
     y_column: str
     columns: list[str]
     duration_seconds: float
+    # Axis-aligned bounding box over (x_column, y_column). ``None`` if the
+    # bounds query raised (e.g. spatial-extension edge cases on exotic
+    # geometries). Consumers use these to quantize coordinates for the
+    # wire — the frontend sends a MIN-MAX linear map to pack f32 → u16.
+    x_bounds: tuple[float, float] | None = None
+    y_bounds: tuple[float, float] | None = None
 
 
 def _detect_columns(
@@ -175,13 +181,22 @@ def fast_load_parquet(
 
     row_count = con.sql(f"SELECT COUNT(*) FROM {quote_ident(table)}").fetchone()[0]
     emit("bounds", 98.0, "Computing bounding box")
-    # Optional but cheap sanity bbox — warms the column stats.
+    # Bbox over (x, y). Also warms the column stats. Captured so the
+    # HTTP layer can advertise it to the viewer for u16 wire-packing.
+    x_bounds: tuple[float, float] | None = None
+    y_bounds: tuple[float, float] | None = None
     try:
-        con.sql(
+        row = con.sql(
             f"SELECT MIN({quote_ident(x_out)}), MAX({quote_ident(x_out)}), "
             f"MIN({quote_ident(y_out)}), MAX({quote_ident(y_out)}) "
             f"FROM {quote_ident(table)}"
         ).fetchone()
+        if row is not None and all(v is not None for v in row):
+            x_min, x_max, y_min, y_max = (float(v) for v in row)
+            if x_max > x_min:
+                x_bounds = (x_min, x_max)
+            if y_max > y_min:
+                y_bounds = (y_min, y_max)
     except Exception:
         pass
 
@@ -194,6 +209,8 @@ def fast_load_parquet(
         y_column=y_out,
         columns=columns + [c for c in (x_out, y_out) if c not in columns],
         duration_seconds=time.perf_counter() - t_start,
+        x_bounds=x_bounds,
+        y_bounds=y_bounds,
     )
 
 

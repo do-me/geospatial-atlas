@@ -29,6 +29,7 @@
     table,
     x,
     y,
+    bounds = null,
     category = null,
     text = null,
     image = null,
@@ -72,8 +73,10 @@
   let clientId: any | null = $state.raw(null);
 
   $effect(() => {
-    // Let Svelte track the dependencies.
-    let deps = { coordinator: coordinator, source: { table, x, y, category } };
+    // Let Svelte track the dependencies. Include `bounds` so changing from
+    // null → set (or back) rebuilds the client with the right packed-SQL
+    // path.
+    let deps = { coordinator: coordinator, source: { table, x, y, category }, bounds };
 
     let client: { destroy: () => void } | null = null;
     let didDestroy = false;
@@ -90,15 +93,38 @@
       maxDensity = approxDensity.maxDensity;
       categoryCount = approxDensity.categoryCount;
 
-      // A client is a thing that queries data from a selection with user-defined query
+      // Wire-packing: when axis-aligned bounds are advertised by the data
+      // source, pack x/y as u16 on the wire (linear min→0, max→65535) and
+      // unpack to f32 on receipt. Payload drops from (f32 + f32 + u8) = 9
+      // bytes/point to (u16 + u16 + u8) = 5 bytes/point — about 44 %
+      // smaller for the 75 M-point scatter query. Quantization error at
+      // the bbox scale is ≤ (range / 65535), well below one screen pixel
+      // for global GIS views.
+      const packed = bounds != null;
+      const packedBounds = bounds;
       client = makeClient({
         coordinator: deps.coordinator,
         selection: filter ?? undefined,
         query: (predicate) => {
+          let xExpr: any;
+          let yExpr: any;
+          if (packed && packedBounds != null) {
+            const [xMin, xMax] = packedBounds.x;
+            const [yMin, yMax] = packedBounds.y;
+            const xRange = xMax - xMin;
+            const yRange = yMax - yMin;
+            // GREATEST/LEAST clamp so an out-of-bbox row (possible with
+            // filters that inject synthetic rows) never overflows u16.
+            xExpr = SQL.sql`GREATEST(0, LEAST(65535, ROUND((${SQL.column(source.x)} - ${xMin}) / ${xRange} * 65535)))::USMALLINT`;
+            yExpr = SQL.sql`GREATEST(0, LEAST(65535, ROUND((${SQL.column(source.y)} - ${yMin}) / ${yRange} * 65535)))::USMALLINT`;
+          } else {
+            xExpr = SQL.sql`${SQL.column(source.x)}::FLOAT`;
+            yExpr = SQL.sql`${SQL.column(source.y)}::FLOAT`;
+          }
           return SQL.Query.from(source.table)
             .select({
-              x: SQL.sql`${SQL.column(source.x)}::FLOAT`,
-              y: SQL.sql`${SQL.column(source.y)}::FLOAT`,
+              x: xExpr,
+              y: yExpr,
               ...(source.category != null ? { c: SQL.sql`${SQL.column(source.category)}::UTINYINT` } : {}),
             })
             .where(predicate);
@@ -107,12 +133,32 @@
           let xArray = data.getChild("x").toArray();
           let yArray = data.getChild("y").toArray();
           let categoryArray = data.getChild("c")?.toArray() ?? null;
-          // Ensure that the arrays are typed arrays.
-          if (xArray != null && !(xArray instanceof Float32Array)) {
-            xArray = new Float32Array(xArray);
-          }
-          if (yArray != null && !(yArray instanceof Float32Array)) {
-            yArray = new Float32Array(yArray);
+
+          if (packed && packedBounds != null && (xArray instanceof Uint16Array || yArray instanceof Uint16Array)) {
+            // Unpack u16 → f32 using the same linear map the server used
+            // to quantize. Doing this once per batch is cheap compared to
+            // the bytes we just saved on the wire.
+            const [xMin, xMax] = packedBounds.x;
+            const [yMin, yMax] = packedBounds.y;
+            const xScale = (xMax - xMin) / 65535;
+            const yScale = (yMax - yMin) / 65535;
+            const n = xArray?.length ?? yArray?.length ?? 0;
+            const xOut = new Float32Array(n);
+            const yOut = new Float32Array(n);
+            for (let i = 0; i < n; i++) {
+              xOut[i] = xMin + (xArray as Uint16Array)[i] * xScale;
+              yOut[i] = yMin + (yArray as Uint16Array)[i] * yScale;
+            }
+            xArray = xOut;
+            yArray = yOut;
+          } else {
+            // Ensure that the arrays are typed arrays.
+            if (xArray != null && !(xArray instanceof Float32Array)) {
+              xArray = new Float32Array(xArray);
+            }
+            if (yArray != null && !(yArray instanceof Float32Array)) {
+              yArray = new Float32Array(yArray);
+            }
           }
           if (categoryArray != null && !(categoryArray instanceof Uint8Array)) {
             categoryArray = new Uint8Array(categoryArray);
