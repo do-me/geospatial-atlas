@@ -38,6 +38,18 @@ export interface EmbeddingRendererProps {
   /** Density weight for downsampling (0-10). Default: 5 */
   downsampleDensityWeight: number;
   isGis: boolean;
+  /**
+   * When true, the renderer skips the per-frame downsample compute chain
+   * (cull → sample → compact) and renders from the previous frame's
+   * compacted point set. The viewport matrix uniform is still updated, so
+   * the cached points reproject correctly under pure pan; only points
+   * that should newly enter the viewport are momentarily missing until
+   * skipDownsampleCompute drops back to false. Used to keep world-view
+   * pan fluent on very large datasets — caller flips this on for the
+   * duration of a drag.
+   * Default: false.
+   */
+  skipDownsampleCompute?: boolean;
 }
 
 export interface DensityMap {

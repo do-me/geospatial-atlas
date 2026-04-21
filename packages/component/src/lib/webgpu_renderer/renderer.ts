@@ -76,6 +76,7 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
       downsampleMaxPoints: 4000000,
       downsampleDensityWeight: 5,
       isGis: false,
+      skipDownsampleCompute: false,
     };
 
     this.viewport = new Viewport({ x: 0, y: 0, scale: 1 }, width, height);
@@ -481,7 +482,13 @@ function makeRenderCommand(
           // Perform downsample. This now also runs the compact_accepted pass
           // which populates compact_indices + indirect_args[1] so the
           // followup drawPointsCompacted only iterates accepted instances.
-          downsample(encoder, downsampleConfig);
+          // When skipDownsampleCompute is set we skip the entire compute
+          // chain and reuse the previous frame's compact_indices — the
+          // updated viewport matrix uniform still reprojects them. Used
+          // during pan to drop ~16ms of compute floor per frame.
+          if (!props.skipDownsampleCompute) {
+            downsample(encoder, downsampleConfig);
+          }
 
           // Draw accepted points via indirect draw — vertex shader runs
           // for ~maxPoints instances instead of `count`. This collapses the

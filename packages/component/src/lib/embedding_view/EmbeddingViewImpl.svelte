@@ -224,6 +224,18 @@
   // fluent at very large datasets — the configured cap only kicks in once
   // the gesture ends and the renderer has time to draw the full sample.
   let isInteracting = $state(false);
+  // Set to true after the first full (non-interactive) render. Gating
+  // skipDownsampleCompute on this avoids drawing from an empty
+  // compact_indices buffer when a user starts panning before the initial
+  // render lands.
+  let hasInitialFrame = $state(false);
+  // Wall-clock time of the last full downsample compute, used to
+  // periodically re-sample during long pans so the visible point set
+  // doesn't drift toward "only the points that were in viewport when
+  // the gesture began". Refresh interval matches a comfortable visual
+  // update cadence (~5Hz).
+  let lastFullComputeAt = $state(0);
+  const COMPUTE_REFRESH_INTERVAL_MS = 200;
   let interactionDecayTimer: ReturnType<typeof setTimeout> | null = null;
   function bumpInteraction() {
     isInteracting = true;
@@ -363,9 +375,30 @@
       categoryColors: resolvedCategoryColors,
       downsampleMaxPoints: effectiveDownsampleMaxPoints,
       downsampleDensityWeight: effectiveDownsampleDensityWeight,
+      // Reuse the last compacted set during gestures — frees the GPU from
+      // re-scanning all 75M points every frame. We refresh on a coarse
+      // schedule (~5Hz) so points entering the viewport from outside the
+      // last sample area still get picked up, just at lower cadence than
+      // the per-frame draw.
+      skipDownsampleCompute:
+        isInteracting && hasInitialFrame &&
+        performance.now() - lastFullComputeAt < COMPUTE_REFRESH_INTERVAL_MS,
       isGis,
       ...viewingParams,
     });
+    if (needsRender) {
+      // We can't tell from setProps whether the renderer chose the skip
+      // path — the next render() does. Approximate: any frame that wasn't
+      // configured to skip is a "full" frame.
+      const willCompute =
+        !isInteracting ||
+        !hasInitialFrame ||
+        performance.now() - lastFullComputeAt >= COMPUTE_REFRESH_INTERVAL_MS;
+      if (willCompute) {
+        lastFullComputeAt = performance.now();
+        hasInitialFrame = true;
+      }
+    }
 
     if (needsRender) {
       setNeedsRender();
