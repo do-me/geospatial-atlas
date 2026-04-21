@@ -194,10 +194,11 @@ async function dragPan(page: Page, seconds: number): Promise<unknown> {
  */
 interface SweepConfig { tag: string; query: string; description: string; targetScale?: number }
 const CONFIGS: SweepConfig[] = [
-  { tag: "world-now",       query: "perf=1",                                                     description: "world view, defaults — adaptive cap should kick in" },
-  { tag: "world-no-adaptive", query: "perf=1&interactiveCap=0",                                  description: "world view, defaults, adaptive cap DISABLED for A/B" },
-  { tag: "world-200k",      query: "perf=1&downsampleMax=200000&densityWeight=0",                description: "world view, 200k cap (no adaptive needed)" },
-  { tag: "city-now",        query: "perf=1",                                                     description: "city view, defaults",                          targetScale: 5.0 },
+  { tag: "world",         query: "perf=1",                              description: "world view, all opts" },
+  { tag: "region",        query: "perf=1",                              description: "region view, all opts",         targetScale: 0.5 },
+  { tag: "city",          query: "perf=1",                              description: "city view, all opts",           targetScale: 5.0 },
+  { tag: "neighborhood",  query: "perf=1",                              description: "neighborhood (50x), all opts",  targetScale: 50.0 },
+  { tag: "world-noskip",  query: "perf=1&interactiveCap=0",             description: "world A/B: adaptive disabled" },
 ];
 
 async function setViewport(page: Page, scale: number) {
