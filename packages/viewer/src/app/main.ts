@@ -35,6 +35,14 @@ if (typeof window !== "undefined") {
   if (mode === "density" || mode === "points") {
     (overrides as any).renderMode = mode;
   }
+  // Compute-shader workgroup sizes. Useful for sweeping on Apple Silicon
+  // (SIMD=32; 64/128/256 are all SIMD-aligned). `wgDs` sets all three
+  // downsample passes in one go; pass wgSample / wgCompact to override
+  // individual passes.
+  for (const k of ["wgDs", "wgSample", "wgCompact", "wgAcc", "wgBlur"] as const) {
+    const v = numParam(k);
+    if (v !== undefined) (overrides as any)[k] = v;
+  }
   if (Object.keys(overrides).length > 0) {
     (window as any).__atlasPerfOverrides = overrides;
   }

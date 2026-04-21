@@ -3,22 +3,19 @@
 import type { Dataflow, Node } from "../dataflow.js";
 import type { DataBuffers } from "./renderer.js";
 import { gpuBuffer } from "./utils.js";
+import { downsamplePipelineConstants, resolveWgConfig } from "./wg_config.js";
 
-const WORKGROUP_SIZE = 256;
-// Fixed X workgroups count for 2D dispatch (256 * 256 = 65536 threads per row)
-// This matches the stride used in the shader: id.y * 65536 + id.x
-const WORKGROUPS_X = 256;
-const THREADS_PER_ROW = WORKGROUPS_X * WORKGROUP_SIZE; // 65536
-
-// Helper to compute 2D dispatch dimensions for large point counts
-function computeDispatch(count: number): [number, number] {
-  const totalWorkgroups = Math.ceil(count / WORKGROUP_SIZE);
-  if (totalWorkgroups <= WORKGROUPS_X) {
+// Workgroup + dispatch stride come from the runtime WgConfig; the
+// dispatch grid is (workgroups_x, y) where workgroups_x = stride /
+// wg_size, matching the shader's `id.y * DOWNSAMPLE_STRIDE + id.x`.
+function computeDispatch(count: number, wgSize: number, stride: number): [number, number] {
+  const workgroupsX = Math.max(1, Math.floor(stride / wgSize));
+  const totalWorkgroups = Math.ceil(count / wgSize);
+  if (totalWorkgroups <= workgroupsX) {
     return [totalWorkgroups, 1];
   }
-  // Use 2D dispatch with fixed X stride
-  const y = Math.ceil(count / THREADS_PER_ROW);
-  return [WORKGROUPS_X, y];
+  const y = Math.ceil(count / stride);
+  return [workgroupsX, y];
 }
 
 export interface DownsampleResources {
@@ -200,6 +197,9 @@ export function makeDownsampleCommand(
     device.createBindGroup({ layout, entries: [] }),
   );
 
+  const wgConfig = resolveWgConfig();
+  const dsConstants = downsamplePipelineConstants(wgConfig);
+
   // viewport_cull needs blur_buffer for density lookup
   // Pipeline layout: [group0, group1, blurOnly, group3] to match @group(3) for downsample buffers
   const viewportCullPipeline = df.derive(
@@ -207,7 +207,7 @@ export function makeDownsampleCommand(
     (device, module, group0, group1, group2, group3) =>
       device.createComputePipeline({
         layout: device.createPipelineLayout({ bindGroupLayouts: [group0, group1, group2, group3] }),
-        compute: { module, entryPoint: "downsample_viewport_cull" },
+        compute: { module, entryPoint: "downsample_viewport_cull", constants: dsConstants },
       }),
   );
 
@@ -218,7 +218,7 @@ export function makeDownsampleCommand(
     (device, module, group0, group1, empty, group3) =>
       device.createComputePipeline({
         layout: device.createPipelineLayout({ bindGroupLayouts: [group0, group1, empty, group3] }),
-        compute: { module, entryPoint: "downsample_density_sample" },
+        compute: { module, entryPoint: "downsample_density_sample", constants: dsConstants },
       }),
   );
 
@@ -229,7 +229,7 @@ export function makeDownsampleCommand(
     (device, module, group0, group1, empty, group3) =>
       device.createComputePipeline({
         layout: device.createPipelineLayout({ bindGroupLayouts: [group0, group1, empty, group3] }),
-        compute: { module, entryPoint: "compact_accepted" },
+        compute: { module, entryPoint: "compact_accepted", constants: dsConstants },
       }),
   );
 
@@ -285,7 +285,14 @@ export function makeDownsampleCommand(
         const initIndirect = new Uint32Array([4, 0, 0, 0]);
         device.queue.writeBuffer(indirectArgsBuffer, 0, initIndirect);
 
-        const [workgroupsX, workgroupsY] = computeDispatch(count);
+        // All three downsample passes share the same stride; pick any
+        // wg size (they're bound by downsampleCull here — the shader
+        // strides match across passes).
+        const [workgroupsX, workgroupsY] = computeDispatch(
+          count,
+          wgConfig.downsampleCull,
+          wgConfig.downsampleStride,
+        );
 
         // Pass 1: Viewport culling + density lookup (needs blur_buffer for density)
         // Pipeline layout: [group0, group1, blurOnly, group3]

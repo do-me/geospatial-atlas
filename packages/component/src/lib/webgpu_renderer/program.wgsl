@@ -2,6 +2,24 @@
 
 enable f16;
 
+// Pipeline-overridable workgroup sizes. Apple Silicon GPUs use 32-wide
+// SIMDs and 8 SIMDs per core → 256 concurrent threads max. Smaller
+// threadgroups yield higher occupancy for latency hiding; bigger ones
+// amortize dispatch overhead. `override` lets the host swap values at
+// pipeline-creation time without recompiling the WGSL.
+override wg_downsample_cull: u32 = 256u;
+override wg_density_sample: u32 = 256u;
+override wg_compact: u32 = 256u;
+override wg_accumulate: u32 = 64u;
+override wg_gaussian_blur: u32 = 64u;
+
+// Row-strides used for 2D dispatch. Must satisfy
+// stride == wg_size * workgroups_x, i.e. the host must recompute
+// workgroups_x = stride / wg_size when it changes the wg_*. Strides
+// themselves are independent tunables (smaller → more rows, bigger y
+// dimension in dispatch).
+override ACCUMULATE_STRIDE: u32 = 4096u;
+
 struct Uniforms {
   count: u32,
   category_count: u32,
@@ -102,11 +120,11 @@ fn increment_count(x: i32, y: i32, category: u32, value: u32) {
   atomicAdd(&count_buffer[offset], value);
 }
 
-@compute @workgroup_size(64, 1)
+@compute @workgroup_size(wg_accumulate, 1)
 fn accumulate(@builtin(global_invocation_id) id: vec3<u32>) {
   let width = uniforms.density_width;
   let height = uniforms.density_height;
-  let index = id.y * 4096 + id.x; // 4096 = 64 * 64
+  let index = id.y * ACCUMULATE_STRIDE + id.x;
   if (index >= uniforms.count) { return; }
   let point = get_point(index);
   let pos = uniforms.matrix * point.position;
@@ -304,7 +322,7 @@ fn gamma_correction_fs(in: GammaCorrectionVertexOutput) -> @location(0) vec4<f32
 // Gaussian Blur
 // =====================================================
 
-@compute @workgroup_size(64, 1)
+@compute @workgroup_size(wg_gaussian_blur, 1)
 fn gaussian_blur_stage_1(@builtin(global_invocation_id) id: vec3<u32>) {
   let width = uniforms.density_width;
   let height = uniforms.density_height;
@@ -321,7 +339,7 @@ fn gaussian_blur_stage_1(@builtin(global_invocation_id) id: vec3<u32>) {
   );
 }
 
-@compute @workgroup_size(64, 1)
+@compute @workgroup_size(wg_gaussian_blur, 1)
 fn gaussian_blur_stage_2(@builtin(global_invocation_id) id: vec3<u32>) {
   let width = uniforms.density_width;
   let height = uniforms.density_height;
@@ -418,9 +436,12 @@ fn random_float(seed: u32) -> f32 {
 // Uses 2D dispatch for large point counts (>65K workgroups)
 // Stride: 256 workgroups * 256 threads = 65536 threads per row
 
-const DOWNSAMPLE_STRIDE: u32 = 65536u;
+// Pipeline override so host stays in sync with wg_downsample_cull
+// (stride == wg_size * workgroups_x). Default keeps the previous layout
+// of 256 workgroups × 256 threads = 65536.
+override DOWNSAMPLE_STRIDE: u32 = 65536u;
 
-@compute @workgroup_size(256)
+@compute @workgroup_size(wg_downsample_cull)
 fn downsample_viewport_cull(@builtin(global_invocation_id) id: vec3<u32>) {
   let index = id.y * DOWNSAMPLE_STRIDE + id.x;
   if (index >= uniforms.count) { return; }
@@ -466,7 +487,7 @@ fn downsample_viewport_cull(@builtin(global_invocation_id) id: vec3<u32>) {
 // Downsampling Pass 2: Probabilistic acceptance
 // =====================================================
 
-@compute @workgroup_size(256)
+@compute @workgroup_size(wg_density_sample)
 fn downsample_density_sample(@builtin(global_invocation_id) id: vec3<u32>) {
   let index = id.y * DOWNSAMPLE_STRIDE + id.x;
   if (index >= uniforms.count) { return; }
@@ -561,7 +582,7 @@ fn points_downsampled_vs(
 var<workgroup> wg_local_count: atomic<u32>;
 var<workgroup> wg_base: u32;
 
-@compute @workgroup_size(256)
+@compute @workgroup_size(wg_compact)
 fn compact_accepted(
   @builtin(global_invocation_id) id: vec3<u32>,
   @builtin(local_invocation_index) lid: u32,

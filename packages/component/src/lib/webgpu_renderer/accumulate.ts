@@ -3,9 +3,7 @@
 import type { Dataflow, Node } from "../dataflow.js";
 import type { BindGroups } from "./bind_groups.js";
 import type { AuxiliaryResources, DataBuffers } from "./renderer.js";
-
-const WORKGROUP_SIZE_X = 64;
-const WORKGROUP_MAX_COUNT_X = 64;
+import { accumulatePipelineConstants, resolveWgConfig } from "./wg_config.js";
 
 export function makeAccumulateCommand(
   df: Dataflow,
@@ -15,10 +13,14 @@ export function makeAccumulateCommand(
   dataBuffers: DataBuffers,
   auxiliaryResources: AuxiliaryResources,
 ): Node<(encoder: GPUCommandEncoder) => void> {
+  const wgConfig = resolveWgConfig();
+  const constants = accumulatePipelineConstants(wgConfig);
+  // Host-side dispatch keeps step with shader's `id.y * ACCUMULATE_STRIDE + id.x`.
+  const workgroupsX = Math.max(1, Math.floor(wgConfig.accumulateStride / wgConfig.accumulate));
   let pipeline = df.derive([device, module, bindGroups.layouts], (device, module, layouts) =>
     device.createComputePipeline({
       layout: device.createPipelineLayout({ bindGroupLayouts: [layouts.group0, layouts.group1, layouts.group2A] }),
-      compute: { module: module, entryPoint: "accumulate" },
+      compute: { module: module, entryPoint: "accumulate", constants },
     }),
   );
   return df.derive(
@@ -40,10 +42,11 @@ export function makeAccumulateCommand(
       pass.setBindGroup(0, group0);
       pass.setBindGroup(1, group1);
       pass.setBindGroup(2, group2A);
-      if (count <= WORKGROUP_SIZE_X * WORKGROUP_MAX_COUNT_X) {
-        pass.dispatchWorkgroups(Math.ceil(count / WORKGROUP_SIZE_X));
+      const threadsPerRow = wgConfig.accumulateStride;
+      if (count <= threadsPerRow) {
+        pass.dispatchWorkgroups(Math.ceil(count / wgConfig.accumulate));
       } else {
-        pass.dispatchWorkgroups(WORKGROUP_MAX_COUNT_X, Math.ceil(count / (WORKGROUP_SIZE_X * WORKGROUP_MAX_COUNT_X)));
+        pass.dispatchWorkgroups(workgroupsX, Math.ceil(count / threadsPerRow));
       }
       pass.end();
     },

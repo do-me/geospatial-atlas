@@ -2,8 +2,7 @@
 
 import type { Dataflow, Node } from "../dataflow.js";
 import type { BindGroups } from "./bind_groups.js";
-
-const WORKGROUP_SIZE = 64;
+import { gaussianBlurPipelineConstants, resolveWgConfig } from "./wg_config.js";
 
 export function makeGaussianBlurCommand(
   df: Dataflow,
@@ -14,12 +13,15 @@ export function makeGaussianBlurCommand(
   height: Node<number>,
   categoryCount: Node<number>,
 ): Node<(encoder: GPUCommandEncoder) => void> {
+  const wgConfig = resolveWgConfig();
+  const constants = gaussianBlurPipelineConstants(wgConfig);
+  const wg = wgConfig.gaussianBlur;
   let pipeline1 = df.derive([device, module, bindGroups.layouts], (device, module, layouts) =>
     device.createComputePipeline({
       layout: device.createPipelineLayout({
         bindGroupLayouts: [layouts.group0, layouts.group1, layouts.group2B, layouts.group3],
       }),
-      compute: { module: module, entryPoint: "gaussian_blur_stage_1" },
+      compute: { module: module, entryPoint: "gaussian_blur_stage_1", constants },
     }),
   );
   let pipeline2 = df.derive([device, module, bindGroups.layouts], (device, module, layouts) =>
@@ -27,7 +29,7 @@ export function makeGaussianBlurCommand(
       layout: device.createPipelineLayout({
         bindGroupLayouts: [layouts.group0, layouts.group1, layouts.group2B, layouts.group3],
       }),
-      compute: { module: module, entryPoint: "gaussian_blur_stage_2" },
+      compute: { module: module, entryPoint: "gaussian_blur_stage_2", constants },
     }),
   );
   return df.derive(
@@ -49,9 +51,9 @@ export function makeGaussianBlurCommand(
       pass.setBindGroup(2, group2B);
       pass.setBindGroup(3, group3);
       pass.setPipeline(pipeline1);
-      pass.dispatchWorkgroups(Math.ceil(width / WORKGROUP_SIZE), categoryCount);
+      pass.dispatchWorkgroups(Math.ceil(width / wg), categoryCount);
       pass.setPipeline(pipeline2);
-      pass.dispatchWorkgroups(Math.ceil(height / WORKGROUP_SIZE), categoryCount);
+      pass.dispatchWorkgroups(Math.ceil(height / wg), categoryCount);
       pass.end();
     },
   );
