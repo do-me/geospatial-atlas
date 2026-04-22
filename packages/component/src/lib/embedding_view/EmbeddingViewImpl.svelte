@@ -359,7 +359,102 @@
 
   let needsUpdateLabels = true;
 
+  // The viewport at time of the last actual WebGPU render. When a gesture
+  // is a pure pan (scale unchanged), we skip the compute+draw pipeline
+  // entirely and CSS-translate the already-rendered canvas by the pixel
+  // delta between renderedViewport and the current viewport. This is
+  // analogous to how maplibre's basemap tiles pan: the expensive work
+  // (rasterising points at 4M cap) runs once, then pan is pure compositing.
+  // On pan end, or if the pan distance exceeds ~half the viewport (at
+  // which point the canvas would expose blank edges), we re-render.
+  let renderedViewport: { x: number; y: number; scale: number } | null = null;
+
+  function cssPanDelta() {
+    if (!renderedViewport) return null;
+    const dx = resolvedViewportState.x - renderedViewport.x;
+    const dy = resolvedViewportState.y - renderedViewport.y;
+    const s = renderedViewport.scale;
+    // Same aspect-corrected scaling the Viewport matrix uses — keeps CSS
+    // translate pixel-perfect against where a fresh render would have
+    // placed the same world coordinates.
+    const sx = width < height ? s * (height / width) : s;
+    const sy = width < height ? s : s * (width / height);
+    const dxCss = -dx * sx * (width / 2);
+    const dyCss = dy * sy * (height / 2);
+    return { dxCss, dyCss };
+  }
+
+  function applyCssPan() {
+    if (!canvas) return;
+    const d = cssPanDelta();
+    if (!d) return;
+    canvas.style.transform = `translate(${d.dxCss}px, ${d.dyCss}px)`;
+  }
+
+  function clearCssPan() {
+    if (canvas) canvas.style.transform = "";
+  }
+
+  // Debug counters exposed on window for Playwright — lets a test assert
+  // the CSS-pan path actually ran and the clear happened only after GPU
+  // present. Cheap, stripped by tree-shaking if __atlasPerfEnabled is
+  // never set on window.
+  function bumpDbg(key: string) {
+    if (typeof window === "undefined") return;
+    const dbg = ((window as any).__atlasPanDbg ??= {
+      cssPanApplied: 0,
+      cssPanSkipped_noInteract: 0,
+      cssPanSkipped_noRendered: 0,
+      cssPanSkipped_scaleChanged: 0,
+      cssPanSkipped_overLimit: 0,
+      clearedViaGpuDone: 0,
+      renderCalls: 0,
+      lastTransform: "",
+    });
+    dbg[key] = (dbg[key] ?? 0) + 1;
+  }
+
   $effect.pre(() => {
+    // CSS-pan fast path: mid-gesture, scale unchanged, and the canvas
+    // bitmap still covers the viewport. Zero GPU work — the user's
+    // insight that "if I'm only panning, the points are already there".
+    if (!isInteracting) {
+      bumpDbg("cssPanSkipped_noInteract");
+    } else if (renderedViewport == null) {
+      bumpDbg("cssPanSkipped_noRendered");
+    } else if (Math.abs(resolvedViewportState.scale - renderedViewport.scale) >= 1e-9) {
+      bumpDbg("cssPanSkipped_scaleChanged");
+    } else if (
+      isInteracting &&
+      renderedViewport != null &&
+      canvas != null
+    ) {
+      const d = cssPanDelta();
+      if (d != null) {
+        // Always apply CSS-pan during interaction — never fall through
+        // to a mid-gesture re-render, which causes a visible flash as
+        // the canvas briefly shows old content at its un-translated DOM
+        // position. Accept blank edges at extreme pan distances; the
+        // user either stays within the cached region or tolerates a
+        // bit of unrendered margin. The single re-render happens on
+        // gesture release.
+        const t = `translate(${d.dxCss}px, ${d.dyCss}px)`;
+        canvas.style.transform = t;
+        bumpDbg("cssPanApplied");
+        if (typeof window !== "undefined") {
+          ((window as any).__atlasPanDbg as any).lastTransform = t;
+        }
+        return;
+      }
+    }
+    // Deliberately NOT clearing the CSS transform here. If we cleared it
+    // before the new render lands on the canvas, there's a visible gap
+    // (CSS style change is synchronous, GPU presentation is not) where
+    // the old bitmap sits at its un-translated DOM position while the
+    // basemap is already at the new viewport — that's the "points
+    // disappear" flash during release. The render() function clears the
+    // transform after the GPU has finished presenting the new frame.
+
     let needsRender = renderer?.setProps({
       mode: mode,
       colorScheme: colorScheme,
@@ -398,6 +493,14 @@
         lastFullComputeAt = performance.now();
         hasInitialFrame = true;
       }
+      // Snapshot the viewport that this full render will reflect — the
+      // CSS-pan fast path needs it to compute the translate delta on
+      // the next mid-gesture frame.
+      renderedViewport = {
+        x: resolvedViewportState.x,
+        y: resolvedViewportState.y,
+        scale: resolvedViewportState.scale,
+      };
     }
 
     if (needsRender) {
@@ -421,10 +524,18 @@
     if (!canvas || !renderer) {
       return;
     }
-    canvas.width = renderer.props.width;
-    canvas.height = renderer.props.height;
-    canvas.style.width = `${renderer.props.width / pixelRatio}px`;
-    canvas.style.height = `${renderer.props.height / pixelRatio}px`;
+    // Only assign width/height when they actually change. Per HTML spec,
+    // even same-value assignment resets the canvas bitmap, which on WebGPU
+    // invalidates the swap chain and causes a 1-frame blank at the moment
+    // of release.
+    if (canvas.width !== renderer.props.width) canvas.width = renderer.props.width;
+    if (canvas.height !== renderer.props.height) canvas.height = renderer.props.height;
+    const cssW = `${renderer.props.width / pixelRatio}px`;
+    const cssH = `${renderer.props.height / pixelRatio}px`;
+    if (canvas.style.width !== cssW) canvas.style.width = cssW;
+    if (canvas.style.height !== cssH) canvas.style.height = cssH;
+    const localCanvas = canvas;
+    const dev = (renderer as any).gpuDevice as GPUDevice | undefined;
     if (isPerfEnabled()) {
       const t0 = performance.now();
       renderer.render();
@@ -433,13 +544,45 @@
       const cap = renderer.props.downsampleMaxPoints;
       const downsampled = cap != null && Number.isFinite(cap) && cap > 0 && count > cap;
       perfSetPointCount(count);
-      const dev = (renderer as any).gpuDevice as GPUDevice | undefined;
       const whenGpuDone = dev
         ? dev.queue.onSubmittedWorkDone().then(() => performance.now() - t0)
         : undefined;
       perfRecord({ cpuMs: dt, downsampled, whenGpuDone });
     } else {
       renderer.render();
+    }
+    // Clear the CSS-pan transform after the GPU has finished presenting
+    // the fresh frame — only then is it safe to drop the old translated
+    // bitmap. Clearing earlier causes a visible misalignment flash.
+    // Guarded by !isInteracting so we don't clobber a new in-flight pan
+    // that may have started before the prior GPU work finished.
+    bumpDbg("renderCalls");
+    if (dev) {
+      // Defer the CSS-transform clear by one rAF after onSubmittedWorkDone.
+      // The rAF fires just BEFORE the next compositor paint, so when the
+      // new swap-chain texture and the cleared transform both get committed
+      // they land on the same paint cycle — a stale transform on new
+      // content would be a visible double-translate flash. Clearing
+      // straight from the microtask lets one paint cycle go by with the
+      // old texture plus cleared transform, which reads as a "snap back"
+      // to pre-drag position.
+      dev.queue.onSubmittedWorkDone().then(() => {
+        if (localCanvas && !isInteracting) {
+          requestAnimationFrame(() => {
+            if (localCanvas && !isInteracting) {
+              localCanvas.style.transform = "";
+              bumpDbg("clearedViaGpuDone");
+            }
+          });
+        }
+      });
+    } else if (!isInteracting) {
+      requestAnimationFrame(() => {
+        if (localCanvas && !isInteracting) {
+          localCanvas.style.transform = "";
+          bumpDbg("clearedViaGpuDone");
+        }
+      });
     }
   }
 
@@ -730,10 +873,16 @@
             });
           },
           up: () => {
-            // Decay timer will clear isInteracting; we deliberately don't
-            // immediately drop it so the user-visible re-render to full
-            // detail doesn't happen mid-flight while there are still
-            // queued frames in the swap chain.
+            // With the CSS-pan fast path no GPU work is in flight during
+            // the gesture, so we can snap isInteracting false immediately
+            // — the next $effect.pre run does the full re-render at the
+            // release viewport and clears the canvas CSS transform in one
+            // frame. Skipping the decay makes the visual "settle" instant.
+            if (interactionDecayTimer != null) {
+              clearTimeout(interactionDecayTimer);
+              interactionDecayTimer = null;
+            }
+            isInteracting = false;
           },
         };
       }
