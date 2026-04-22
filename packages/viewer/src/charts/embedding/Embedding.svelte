@@ -49,7 +49,11 @@
 
   const maxCategories = Math.min(20, maxDensityModeCategories());
   const defaultMinimumDensity = 1 / 16;
-  const defaultDownsampleMaxPoints = 4000000;
+  // Infinity = render every point by default. The renderer reads null / Infinity
+  // / NaN / negative as "downsampling disabled" and takes the full-draw path.
+  // The slider fallback uses Math.min(default, totalPointCount), so display
+  // still resolves to totalPointCount once it loads (shows "All").
+  const defaultDownsampleMaxPoints = Infinity;
   const minDownsampleMaxPoints = 50000;
   const defaultDownsampleMaxPointsInteractive = 0;
   const minDownsampleMaxPointsInteractive = 0;
