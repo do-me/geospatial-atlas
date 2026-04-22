@@ -477,6 +477,10 @@
       // the per-frame draw.
       skipDownsampleCompute:
         isInteracting && hasInitialFrame &&
+        // When cap is 0 the stale indirect-args from the last non-zero compute
+        // would replay the previous frame's draw count — force compute so the
+        // downsample early-return clears the args to zero.
+        effectiveDownsampleMaxPoints > 0 &&
         performance.now() - lastFullComputeAt < COMPUTE_REFRESH_INTERVAL_MS,
       isGis,
       ...viewingParams,

@@ -444,10 +444,12 @@ function makeRenderCommand(
         let encoder = device.createCommandEncoder();
 
         // Check if downsampling is enabled
-        // Normalize the maxPoints value: null, Infinity, or invalid values (<=0, NaN) disable downsampling
+        // Normalize the maxPoints value: null, Infinity, NaN, or negative disable downsampling.
+        // 0 is a valid request to render zero points (flows through the compacted path,
+        // which resets indirect args and draws no instances).
         const maxPoints = props.downsampleMaxPoints;
         const effectiveMaxPoints =
-          maxPoints === null || maxPoints === Infinity || !Number.isFinite(maxPoints) || maxPoints <= 0
+          maxPoints === null || maxPoints === Infinity || !Number.isFinite(maxPoints) || maxPoints < 0
             ? null
             : maxPoints;
         const useDownsampling = effectiveMaxPoints !== null && count > effectiveMaxPoints;

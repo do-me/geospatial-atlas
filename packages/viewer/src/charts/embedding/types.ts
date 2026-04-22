@@ -25,6 +25,8 @@ export interface EmbeddingSpec {
   pointSize?: number;
   /** Maximum number of points to render (for downsampling). Default: 4000000. Set to null to disable. */
   downsampleMaxPoints?: number | null;
+  /** Max points rendered while the user is actively zooming/panning. Default: 200000. */
+  downsampleMaxPointsInteractive?: number | null;
   config?: EmbeddingViewConfig;
 }
 

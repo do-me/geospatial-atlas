@@ -265,6 +265,14 @@ export function makeDownsampleCommand(
       count,
     ) =>
       (encoder, config) => {
+        // Reset indirect args first so every early-exit path (count=0,
+        // maxPoints=0) still clears the draw count. Leaving them unset
+        // caused drawPointsCompacted to replay the previous compute's
+        // accepted count, which made maxPoints=0 render the prior frame's
+        // points instead of zero.
+        const initIndirect = new Uint32Array([4, 0, 0, 0]);
+        device.queue.writeBuffer(indirectArgsBuffer, 0, initIndirect);
+
         if (count === 0 || config.maxPoints <= 0) {
           return 0;
         }
@@ -280,10 +288,6 @@ export function makeDownsampleCommand(
 
         // Clear counters
         encoder.clearBuffer(countersBuffer);
-        // Reset indirect args to [vertexCount=4, instanceCount=0, firstVertex=0, firstInstance=0].
-        // The 4 is required because every accepted point expands to a 4-vertex triangle strip.
-        const initIndirect = new Uint32Array([4, 0, 0, 0]);
-        device.queue.writeBuffer(indirectArgsBuffer, 0, initIndirect);
 
         // All three downsample passes share the same stride; pick any
         // wg size (they're bound by downsampleCull here — the shader

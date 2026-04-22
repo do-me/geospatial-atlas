@@ -51,6 +51,8 @@
   const defaultMinimumDensity = 1 / 16;
   const defaultDownsampleMaxPoints = 4000000;
   const minDownsampleMaxPoints = 50000;
+  const defaultDownsampleMaxPointsInteractive = 0;
+  const minDownsampleMaxPointsInteractive = 0;
   const defaultMapStyle = "https://tiles.openfreemap.org/styles/liberty";
 
   let {
@@ -241,6 +243,8 @@
       ...(spec.minimumDensity != null ? { minimumDensity: spec.minimumDensity } : {}),
       pointSize: spec.pointSize ?? 2,
       downsampleMaxPoints: spec.downsampleMaxPoints ?? defaultDownsampleMaxPoints,
+      downsampleMaxPointsInteractive:
+        spec.downsampleMaxPointsInteractive ?? defaultDownsampleMaxPointsInteractive,
     }}
     labels={context.embeddingViewLabels}
     cache={context.persistentCache}
@@ -396,6 +400,34 @@
                 min={minDownsampleMaxPoints}
                 max={totalPointCount}
                 step={Math.max(10000, Math.floor(totalPointCount / 100 / 10000) * 10000)}
+              />
+            </div>
+            {@const interactiveLimit = spec.downsampleMaxPointsInteractive ?? defaultDownsampleMaxPointsInteractive}
+            <div class="text-slate-500 dark:text-slate-400 select-none">
+              While Zooming: {interactiveLimit >= 1000000
+                ? (interactiveLimit / 1000000).toFixed(2) + "M"
+                : (interactiveLimit / 1000).toFixed(0) + "K"}
+            </div>
+            <div class="flex gap-2 items-center">
+              <Slider
+                bind:value={
+                  () =>
+                    Math.max(
+                      minDownsampleMaxPointsInteractive,
+                      spec.downsampleMaxPointsInteractive ?? defaultDownsampleMaxPointsInteractive,
+                    ),
+                  (v) =>
+                    onSpecChange({
+                      downsampleMaxPointsInteractive: Math.max(minDownsampleMaxPointsInteractive, v),
+                    })
+                }
+                min={minDownsampleMaxPointsInteractive}
+                max={totalPointCount}
+                step={1000}
+              />
+              <Button
+                label="Reset"
+                onClick={() => onSpecChange({ downsampleMaxPointsInteractive: defaultDownsampleMaxPointsInteractive })}
               />
             </div>
           {/if}
