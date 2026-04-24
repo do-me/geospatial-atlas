@@ -20,7 +20,10 @@ const SUPPORTED_EXTENSIONS = [
 ];
 
 const isDev = !app.isPackaged;
-const SIDECAR_READY_TIMEOUT_MS = 120_000;
+// 30 min — large parquets (tens of GB / 100M+ rows) cold-load well past the
+// old 2 min budget. The user can always quit the window if something is
+// genuinely stuck; a too-tight timeout forces a restart mid-load.
+const SIDECAR_READY_TIMEOUT_MS = 1_800_000;
 const SIDECAR_HEALTH_POLL_MS = 300;
 
 // ---------- sidecar state (module-level, single window) ----------
@@ -409,10 +412,24 @@ const BUNDLE_ID = "io.github.do-me.geospatial-atlas";
 app.setPath("userData", join(app.getPath("appData"), BUNDLE_ID));
 
 // Hardening + perf flags applied before app.whenReady.
-app.commandLine.appendSwitch("enable-features", "UseOzonePlatform");
+// UseOzonePlatform is Linux-specific (Wayland/X11 abstraction). On Windows
+// it disables the native GPU backend and drops Chromium into software
+// rendering — `supportsDx12: false`, `webgl: disabled_off`, and WebGPU
+// falls back to WebGL. Scope the switch to Linux.
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("enable-features", "UseOzonePlatform");
+}
 // Force the discrete GPU on multi-GPU macOS systems (big perf win for
 // WebGPU/WebGL scatter rendering on MBPs with integrated + discrete).
 app.commandLine.appendSwitch("force-high-performance-gpu");
+// Chromium blocklists WebGPU on a range of older NVIDIA and Intel GPUs that
+// are nonetheless perfectly capable of running Dawn on D3D12 (e.g. GeForce
+// MX150, Intel UHD 620). `--enable-unsafe-webgpu` bypasses that blocklist.
+// The "unsafe" name is historical — WebGPU is stable in Chromium; this flag
+// now just undoes a conservative hardware blocklist. We ship unsigned and
+// users already trust the binary, so this is the right tradeoff for a
+// scatter-renderer whose whole value prop is WebGPU.
+app.commandLine.appendSwitch("enable-unsafe-webgpu");
 
 // Single-instance: subsequent launches focus the existing window and
 // forward the dataset arg.
