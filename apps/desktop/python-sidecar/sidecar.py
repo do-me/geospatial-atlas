@@ -81,18 +81,27 @@ def _start_parent_watchdog(parent_pid_env: Optional[str]) -> None:
     if not parent_pid_env:
         return
 
-    def _watch_stdin() -> None:
-        try:
-            while True:
-                chunk = sys.stdin.buffer.read(4096)
-                if not chunk:
-                    break
-        except Exception:
-            pass
-        _log("stdin closed, shutting down")
-        os._exit(0)
+    # Stdin-EOF watcher — Electron pipes stdin; pipe closure is a reliable
+    # parent-died signal on POSIX.
+    #
+    # Skipped on Windows: any blocking read on a piped stdin (either the
+    # high-level ``sys.stdin.buffer.read`` or the low-level ``os.read``)
+    # starves the main thread under PyInstaller — the sidecar hangs
+    # immediately after its env dump with no further progress. The
+    # ctypes-based pid watchdog below replaces this safeguard on Windows.
+    if sys.platform != "win32":
+        def _watch_stdin() -> None:
+            try:
+                while True:
+                    chunk = sys.stdin.buffer.read(4096)
+                    if not chunk:
+                        break
+            except Exception:
+                pass
+            _log("stdin closed, shutting down")
+            os._exit(0)
 
-    threading.Thread(target=_watch_stdin, name="stdin-watchdog", daemon=True).start()
+        threading.Thread(target=_watch_stdin, name="stdin-watchdog", daemon=True).start()
     try:
         parent_pid = int(parent_pid_env)
     except ValueError:
@@ -124,14 +133,51 @@ def _start_parent_watchdog(parent_pid_env: Optional[str]) -> None:
     except Exception:
         pass
 
+    # Parent-alive probe. On Windows, CPython's ``os.kill(pid, 0)`` opens
+    # the target with PROCESS_ALL_ACCESS, which Electron's main process
+    # routinely denies — that caused a false "parent pid X gone" shutdown
+    # right at startup. Use OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)
+    # + GetExitCodeProcess on Windows, which any user can query.
+    if sys.platform == "win32":
+        import ctypes
+        import ctypes.wintypes as _wt
+
+        _kernel32 = ctypes.windll.kernel32
+        _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        _STILL_ACTIVE = 259
+        _kernel32.OpenProcess.restype = _wt.HANDLE
+        _kernel32.OpenProcess.argtypes = [_wt.DWORD, _wt.BOOL, _wt.DWORD]
+        _kernel32.GetExitCodeProcess.argtypes = [_wt.HANDLE, ctypes.POINTER(_wt.DWORD)]
+        _kernel32.GetExitCodeProcess.restype = _wt.BOOL
+        _kernel32.CloseHandle.argtypes = [_wt.HANDLE]
+
+        def _parent_alive(pid: int) -> bool:
+            h = _kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not h:
+                return False
+            try:
+                code = _wt.DWORD()
+                if not _kernel32.GetExitCodeProcess(h, ctypes.byref(code)):
+                    return True  # transient failure → assume alive
+                return code.value == _STILL_ACTIVE
+            finally:
+                _kernel32.CloseHandle(h)
+    else:
+        def _parent_alive(pid: int) -> bool:
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                return False
+            return True
+
     def _watch_pid() -> None:
         while True:
-            try:
-                os.kill(parent_pid, 0)
-            except OSError:
+            if not _parent_alive(parent_pid):
                 _log(f"parent pid {parent_pid} gone, shutting down")
                 os._exit(0)
-            if os.getppid() == 1:
+            # POSIX reparent-to-init heuristic — Windows never reparents, so
+            # skip there (the probe above is authoritative).
+            if sys.platform != "win32" and os.getppid() == 1:
                 _log("reparented to launchd, shutting down")
                 os._exit(0)
             time.sleep(0.2)
@@ -144,7 +190,14 @@ def _install_signal_handlers() -> None:
         _log(f"signal {signum} received, exiting")
         os._exit(0)
 
-    for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+    # SIGHUP is POSIX-only; on Windows the `signal` module does not expose it,
+    # so referencing signal.SIGHUP raises AttributeError at tuple-construction
+    # time (before the per-signal try/except can catch it).
+    sigs = [signal.SIGINT, signal.SIGTERM]
+    sighup = getattr(signal, "SIGHUP", None)
+    if sighup is not None:
+        sigs.append(sighup)
+    for s in sigs:
         try:
             signal.signal(s, _graceful)
         except (OSError, ValueError):
