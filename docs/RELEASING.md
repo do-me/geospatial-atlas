@@ -1,22 +1,27 @@
 # Releasing geospatial-atlas
 
-Three independent release streams, each with its own tag prefix so the
-desktop app, the Python package, and the static web viewer can evolve on
-their own cadences.
+Three release streams. The desktop app uses bare `v*` tags (so Zenodo's
+GitHub integration archives clean version strings like `v0.0.7`); the
+Python package and static web viewer keep prefixed tags to avoid
+colliding with the repo-wide desktop scheme.
 
 | Stream | Tag prefix | Distro | Workflow |
 |---|---|---|---|
-| Desktop app | `app-v*` | `.dmg` / `.AppImage` / `.deb` / `.msi` / `.exe` | `.github/workflows/app-release.yml` |
+| Desktop app | `v*` | `.dmg` / `.AppImage` / `.deb` / `.msi` / `.exe` | `.github/workflows/app-release.yml` |
 | Python package | `py-v*` | PyPI wheel (`geospatial-atlas`) | (add later — see *Python release* below) |
 | Static web viewer | `web-v*` | GitHub Pages | `.github/workflows/deploy-gh-pages.sh` (manual for now) |
+
+Desktop releases up through `app-v0.0.6` used the `app-v*` prefix; the
+scheme switched at v0.0.7 when the Zenodo auto-DOI integration went
+live.
 
 Mobile is documented in [MOBILE.md](./MOBILE.md) and not shipped yet.
 
 ---
 
-## Cutting the very first release — **v0.0.1**
+## Cutting a desktop release
 
-The desktop app is the one you want to ship today. Minimal path:
+Minimal path:
 
 ```bash
 # 1. Bump the version in apps/desktop/package.json ("version").
@@ -26,14 +31,14 @@ The desktop app is the one you want to ship today. Minimal path:
 # 2. Update CHANGELOG.md with the highlights.
 #
 # 3. Commit the version bump.
-git commit -am "app-v0.0.1: first release"
+git commit -am "chore(desktop): bump version to 0.0.7"
 
 # 4. Tag and push.
-git tag app-v0.0.1
-git push origin main app-v0.0.1
+git tag v0.0.7
+git push origin main v0.0.7
 ```
 
-Pushing the `app-v0.0.1` tag triggers
+Pushing the `v0.0.7` tag triggers
 `.github/workflows/app-release.yml`, which:
 
 1. Spawns four matrix builds: **macOS arm64**, **macOS x64**, **Linux x64**,
@@ -74,7 +79,7 @@ We follow **semver** for each stream independently:
 
 Desktop app version must match the Python package version **after 1.0** so
 `embedding-atlas==X.Y.Z` speaks to `Geospatial Atlas vX.Y.Z`. Before 1.0 they
-can drift (desktop is `app-v0.0.1`, Python is `0.20.0`).
+can drift (desktop is `v0.0.7`, Python is `0.20.0`).
 
 ---
 
@@ -123,9 +128,9 @@ Linux doesn't have a Gatekeeper-equivalent. Just sign `.deb` / `.rpm` with
 Keep a top-level `CHANGELOG.md`. Prepend on each release:
 
 ```md
-## app-v0.0.1 — 2026-04-17
+## v0.0.7 — 2026-05-01
 
-**First desktop release.**
+**Desktop release.**
 
 ### Added
 - Native macOS / Linux / Windows app (Electron + PyInstaller sidecar).
@@ -176,5 +181,5 @@ After a release publishes:
 4. Confirm: WebGPU probe passes, load progresses, view restores on relaunch.
 
 If the release is broken, **delete the GitHub Release + the tag**
-(`git tag -d app-v0.0.1 && git push --delete origin app-v0.0.1`), fix,
+(`git tag -d v0.0.7 && git push --delete origin v0.0.7`), fix,
 re-tag.

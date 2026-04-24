@@ -10,8 +10,10 @@ name: app release (desktop)
 # ``uv run geospatial-atlas`` CLI path.
 #
 # Trigger manually via the Actions tab or by pushing a tag shaped like
-# `app-v0.0.1`. On tag push, the built artifacts are attached to a draft
-# GitHub Release.
+# `v0.0.7`. On tag push, the built artifacts are attached to a draft
+# GitHub Release. (Desktop releases up to app-v0.0.6 used the `app-v*`
+# prefix; the scheme switched to bare `v*` so Zenodo's auto-DOI
+# integration picks up clean version strings.)
 #
 # Note: the Rust toolchain + wasm-bindgen are still installed because
 # the viewer static bundle (packages/viewer + packages/component) pulls
@@ -27,7 +29,7 @@ on:
         default: "false"
   push:
     tags:
-      - "app-v*"
+      - "v*"
 
 permissions:
   contents: write
@@ -196,7 +198,7 @@ jobs:
   release:
     name: draft release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/app-v') || github.event.inputs.publish == 'true'
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.publish == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

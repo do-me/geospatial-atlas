@@ -2,7 +2,8 @@
 
 All notable changes to the Geospatial Atlas desktop app are documented here.
 
-Desktop-app releases are tagged `app-vX.Y.Z`. Other streams (Python package,
+Desktop-app releases are tagged `vX.Y.Z` (from v0.0.7 onward; earlier
+releases used the `app-vX.Y.Z` prefix). Other streams (Python package,
 static web viewer) have their own changelogs / tag prefixes — see
 [`docs/RELEASING.md`](docs/RELEASING.md).
 
