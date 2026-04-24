@@ -631,14 +631,15 @@
     let canFallbackToWebGL = true;
 
     async function createRenderer() {
-      let device = await requestWebGPUDevice();
-      if (device == null) {
+      let result = await requestWebGPUDevice();
+      if (result == null) {
         console.error("Could not get WebGPU device");
         if (canFallbackToWebGL) {
           setupWebGLRenderer(canvas);
         }
         return;
       }
+      const { device, useF16 } = result;
 
       let context = canvas.getContext("webgpu");
       if (context == null) {
@@ -670,7 +671,7 @@
         alphaMode: "premultiplied",
       });
 
-      renderer = new EmbeddingRendererWebGPU(context, device, format, pixelWidth, pixelHeight);
+      renderer = new EmbeddingRendererWebGPU(context, device, format, pixelWidth, pixelHeight, useF16);
     }
 
     createRenderer();

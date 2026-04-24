@@ -14,7 +14,16 @@ export function isWebGPUAvailable(): boolean {
   return true;
 }
 
-export async function requestWebGPUDevice(): Promise<GPUDevice | null> {
+export interface WebGPUDeviceResult {
+  device: GPUDevice;
+  /** True if shader-f16 was successfully requested; the renderer can then use
+   *  the f16 program variant for half-precision blur storage. False means the
+   *  adapter doesn't expose shader-f16 (common on NVIDIA Pascal / Intel UHD
+   *  via Dawn D3D12), so the renderer must fall back to the f32 variant. */
+  useF16: boolean;
+}
+
+export async function requestWebGPUDevice(): Promise<WebGPUDeviceResult | null> {
   if (!isWebGPUAvailable()) {
     return null;
   }
@@ -25,33 +34,33 @@ export async function requestWebGPUDevice(): Promise<GPUDevice | null> {
     return null;
   }
 
-  let descriptors: GPUDeviceDescriptor[] = [
-    // First attempt to request the maximum limit
-    {
-      requiredLimits: {
-        maxBufferSize: adapter.limits.maxBufferSize,
-        maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
-      },
-      requiredFeatures: ["shader-f16"],
-    },
-    // If we cannot get the maximum limit, try lower limits
-    ...[512, 256, 128, 64, 32].map(
-      (sz): GPUDeviceDescriptor => ({
-        requiredLimits: {
-          maxBufferSize: Math.min(sz * 1048576, adapter.limits.maxBufferSize),
-          maxStorageBufferBindingSize: Math.min(sz * 1048576, adapter.limits.maxStorageBufferBindingSize),
-        },
-        requiredFeatures: ["shader-f16"],
-      }),
-    ),
-  ];
+  const limitPresets: (null | number)[] = [null, 512, 256, 128, 64, 32];
+  function buildDescriptor(sz: number | null, features: GPUFeatureName[]): GPUDeviceDescriptor {
+    const maxBuf = sz == null ? adapter!.limits.maxBufferSize : Math.min(sz * 1048576, adapter!.limits.maxBufferSize);
+    const maxStor = sz == null
+      ? adapter!.limits.maxStorageBufferBindingSize
+      : Math.min(sz * 1048576, adapter!.limits.maxStorageBufferBindingSize);
+    return { requiredLimits: { maxBufferSize: maxBuf, maxStorageBufferBindingSize: maxStor }, requiredFeatures: features };
+  }
 
-  for (let descriptor of descriptors) {
-    try {
-      return await adapter.requestDevice(descriptor);
-    } catch (error) {
-      console.error(error);
-      continue;
+  // Try shader-f16 first (half the blur-buffer memory, small perf win on
+  // capable GPUs). If the adapter doesn't expose it, fall back to f32.
+  const adapterSupportsF16 = adapter.features.has("shader-f16");
+  const attempts: Array<{ features: GPUFeatureName[]; useF16: boolean }> = [];
+  if (adapterSupportsF16) {
+    attempts.push({ features: ["shader-f16"], useF16: true });
+  }
+  attempts.push({ features: [], useF16: false });
+
+  for (const { features, useF16 } of attempts) {
+    for (const sz of limitPresets) {
+      try {
+        const device = await adapter.requestDevice(buildDescriptor(sz, features));
+        return { device, useF16 };
+      } catch (error) {
+        console.error(error);
+        continue;
+      }
     }
   }
   return null;

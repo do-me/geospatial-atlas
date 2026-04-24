@@ -27,9 +27,42 @@ import { kdeConfig } from "./kde_config.js";
 
 import programCode from "./program.wgsl?raw";
 
+/** Rewrite the f16-enabled WGSL program to its f32 equivalent.
+ *
+ *  The blur/KDE pipeline stores intermediate densities in an f16 storage
+ *  buffer aliased with a u32 count buffer (they share the 4-byte cell
+ *  layout: one u32 == two adjacent f16). On adapters that don't expose
+ *  the `shader-f16` feature (e.g. NVIDIA Pascal / Intel UHD via Dawn D3D12)
+ *  we instead use one f32 per cell, which keeps the byte layout of the
+ *  aliased u32 atomics intact.
+ *
+ *  The substitutions here are exhaustive for the current `program.wgsl`:
+ *    - strip `enable f16;`
+ *    - `array<f16>` → `array<f32>`
+ *    - `f16(y0)` → `y0` (already f32)
+ *    - `f16(f32((*dst)[offset]) + y0)` → `f32((*dst)[offset]) + y0`
+ *    - `bitcast<u32>(vec2((*src)[offset * 2], (*src)[offset * 2 + 1]))`
+ *       → `bitcast<u32>((*src)[offset])` (read the aliased u32 from one
+ *       f32 slot instead of two f16 slots).
+ *  Host-side the blur buffer size doubles from 2 to 4 bytes per cell
+ *  (see blurBufferSize below).
+ */
+function f32ProgramOf(src: string): string {
+  return src
+    .replace(/^enable f16;\s*$/m, "// enable f16; // stripped for f32 fallback path")
+    .replace(/array<f16>/g, "array<f32>")
+    .replace(/f16\(y0\)/g, "y0")
+    .replace(/f16\(f32\(\(\*dst\)\[offset\]\) \+ y0\)/g, "f32((*dst)[offset]) + y0")
+    .replace(
+      /bitcast<u32>\(vec2\(\(\*src\)\[offset \* 2\], \(\*src\)\[offset \* 2 \+ 1\]\)\)/g,
+      "bitcast<u32>((*src)[offset])",
+    );
+}
+
 export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
   readonly props: EmbeddingRendererProps;
   readonly gpuDevice: GPUDevice;
+  readonly useF16: boolean;
 
   private viewport: Viewport;
   private df: Dataflow;
@@ -41,7 +74,15 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
   private dataBuffers: DataBuffers;
   private renderer: Node<(props: EmbeddingRendererProps, textureView: GPUTextureView) => void>;
 
-  constructor(context: GPUCanvasContext, device: GPUDevice, format: GPUTextureFormat, width: number, height: number) {
+  constructor(
+    context: GPUCanvasContext,
+    device: GPUDevice,
+    format: GPUTextureFormat,
+    width: number,
+    height: number,
+    useF16: boolean = true,
+  ) {
+    this.useF16 = useF16;
     this.context = context;
     this.gpuDevice = device;
 
@@ -101,7 +142,8 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
     };
     this.device = df.value(device);
     this.dataBuffers = makeDataBuffers(df, this.device, this.renderInputs);
-    this.module = df.derive([this.device], (device) => device.createShaderModule({ code: programCode }));
+    const moduleCode = this.useF16 ? programCode : f32ProgramOf(programCode);
+    this.module = df.derive([this.device], (device) => device.createShaderModule({ code: moduleCode }));
     this.uniforms = makeModuleUniforms(df, this.device);
     this.renderer = makeRenderCommand(
       df,
@@ -111,6 +153,7 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
       format,
       this.renderInputs,
       this.dataBuffers,
+      this.useF16,
     );
   }
 
@@ -253,6 +296,7 @@ export function makeAuxiliaryResources(
   densityWidth: Node<number>,
   densityHeight: Node<number>,
   categoryCount: Node<number>,
+  useF16: boolean = true,
 ): AuxiliaryResources {
   let colorTextureFormat: GPUTextureFormat = "rgba16float";
   let alphaTextureFormat: GPUTextureFormat = "r16float";
@@ -269,9 +313,12 @@ export function makeAuxiliaryResources(
     [densityWidth, densityHeight, categoryCount],
     (w: number, h: number, c: number) => w * h * c * 4, // w * h * categoryCount * sizeof(uint32)
   );
+  // 2 bytes/cell for f16, 4 bytes/cell for the f32 fallback (one f32 per
+  // cell keeps the aliased u32 count-buffer layout intact).
+  const blurBytesPerCell = useF16 ? 2 : 4;
   let blurBufferSize = df.derive(
     [densityWidth, densityHeight, categoryCount],
-    (w: number, h: number, c: number) => w * h * c * 2, // w * h * categoryCount * sizeof(f16)
+    (w: number, h: number, c: number) => w * h * c * blurBytesPerCell,
   );
   let countBuffer = df.statefulDerive(
     [device, countBufferSize, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC],
@@ -297,6 +344,7 @@ function makeRenderCommand(
   format: GPUTextureFormat,
   inputs: RenderInputs,
   dataBuffers: DataBuffers,
+  useF16: boolean = true,
 ): Node<(props: EmbeddingRendererProps, textureView: GPUTextureView) => void> {
   const densityPixelRatio = 4;
   let safeMargin = df.derive([inputs.densityBandwidth], (r: number) => Math.ceil(r * 3) + 1);
@@ -313,6 +361,7 @@ function makeRenderCommand(
     densityWidth,
     densityHeight,
     inputs.categoryCount,
+    useF16,
   );
   let bindGroups = makeBindGroups(df, device, uniforms.buffer, dataBuffers, auxiliaryResources);
 
