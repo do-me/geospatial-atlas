@@ -26,9 +26,16 @@ export interface WgConfig {
   /** Downsample stride (must be multiple of downsampleCull/densitySample/compact). */
   downsampleStride: number; // default 65536
   /** Accumulate stride (must be multiple of accumulate). */
-  accumulateStride: number; // default 4096
+  accumulateStride: number; // default 65536
 }
 
+// WebGPU caps any single dispatch dimension at 65535. The accumulate
+// pass dispatches (stride/accumulate, ceil(count/stride)) — so for the
+// Y axis to stay legal we need ``stride * 65535 >= count``. The old
+// 4096 stride overflowed at ~268M points: every render at that scale
+// produced an "Invalid CommandBuffer" warning from Dawn and a black
+// canvas. 65536 takes us past 4 billion points while still leaving
+// workgroupsX = 65536/64 = 1024 ≤ 65535.
 const DEFAULT_CONFIG: WgConfig = {
   downsampleCull: 256,
   densitySample: 256,
@@ -36,7 +43,7 @@ const DEFAULT_CONFIG: WgConfig = {
   accumulate: 64,
   gaussianBlur: 64,
   downsampleStride: 65536,
-  accumulateStride: 4096,
+  accumulateStride: 65536,
 };
 
 function intFromWindow(key: string): number | undefined {

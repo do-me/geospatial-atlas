@@ -12,7 +12,7 @@ from typing import Callable
 import duckdb
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .data_source import DataSource
@@ -128,10 +128,32 @@ def make_server(
     else:
         duckdb_connection = None
 
+    debug_sql = os.environ.get("GSA_DEBUG_SQL", "").lower() in ("1", "true", "yes")
+    # Above this many bytes, the Arrow payload is sent via StreamingResponse
+    # in 4 MiB chunks. uvicorn's default response path holds the entire
+    # bytes object in a single h11 send, which silently drops the
+    # connection for multi-hundred-MB / GB-scale scatter pulls — the
+    # client sees status=000 / ERR_EMPTY_RESPONSE. 256 MiB threshold keeps
+    # small queries on the fast path.
+    STREAM_THRESHOLD = 256 * 1024 * 1024
+    STREAM_CHUNK = 4 * 1024 * 1024
+
+    def _chunked(buf: bytes, chunk: int = STREAM_CHUNK):
+        n = len(buf)
+        i = 0
+        while i < n:
+            yield buf[i : i + chunk]
+            i += chunk
+
     def handle_query(query: dict):
         assert duckdb_connection is not None
         sql = query["sql"]
         command = query["type"]
+        if debug_sql:
+            preview = sql.replace("\n", " ")
+            if len(preview) > 400:
+                preview = preview[:400] + " ..."
+            print(f"[sql {command}] {preview}", flush=True)
         with duckdb_connection.cursor() as cursor:
             try:
                 result = cursor.execute(sql)
@@ -139,6 +161,14 @@ def make_server(
                     return JSONResponse({})
                 elif command == "arrow":
                     buf = arrow_to_bytes(result.arrow())
+                    if debug_sql:
+                        print(f"[sql arrow] -> {len(buf):,} bytes", flush=True)
+                    if len(buf) >= STREAM_THRESHOLD:
+                        return StreamingResponse(
+                            _chunked(buf),
+                            media_type="application/octet-stream",
+                            headers={"Content-Length": str(len(buf))},
+                        )
                     return Response(
                         buf, headers={"Content-Type": "application/octet-stream"}
                     )
@@ -148,6 +178,8 @@ def make_server(
                 else:
                     raise ValueError(f"Unknown command {command}")
             except Exception as e:
+                if debug_sql:
+                    print(f"[sql ERR {command}] {e}", flush=True)
                 return JSONResponse({"error": str(e)}, status_code=500)
 
     def handle_selection(query: dict):

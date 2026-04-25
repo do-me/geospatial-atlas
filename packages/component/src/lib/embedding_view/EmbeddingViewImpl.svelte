@@ -229,13 +229,11 @@
   // compact_indices buffer when a user starts panning before the initial
   // render lands.
   let hasInitialFrame = $state(false);
-  // Wall-clock time of the last full downsample compute, used to
-  // periodically re-sample during long pans so the visible point set
-  // doesn't drift toward "only the points that were in viewport when
-  // the gesture began". Refresh interval matches a comfortable visual
-  // update cadence (~5Hz).
+  // Wall-clock time of the last full downsample compute. Kept for
+  // diagnostics / Playwright assertions; the live render path no longer
+  // refreshes mid-gesture (see skipDownsampleCompute below) — re-compute
+  // happens on gesture release once isInteracting flips false.
   let lastFullComputeAt = $state(0);
-  const COMPUTE_REFRESH_INTERVAL_MS = 200;
   let interactionDecayTimer: ReturnType<typeof setTimeout> | null = null;
   function bumpInteraction() {
     isInteracting = true;
@@ -470,18 +468,21 @@
       categoryColors: resolvedCategoryColors,
       downsampleMaxPoints: effectiveDownsampleMaxPoints,
       downsampleDensityWeight: effectiveDownsampleDensityWeight,
-      // Reuse the last compacted set during gestures — frees the GPU from
-      // re-scanning all 75M points every frame. We refresh on a coarse
-      // schedule (~5Hz) so points entering the viewport from outside the
-      // last sample area still get picked up, just at lower cadence than
-      // the per-frame draw.
+      // Reuse the last compacted set for the entire duration of an
+      // interaction — no downsample/compact passes mid-gesture. At
+      // 322 M-row scale a single full compute is multi-hundred-MB of
+      // intermediate GPU buffers; running it every 200 ms during a
+      // pan was ratcheting the renderer process past macOS jetsam
+      // and killing the tab after a few seconds. Trade-off: points
+      // entering the viewport during a long zoom-and-drag don't
+      // appear until release. Acceptable — the release re-render
+      // catches up.
       skipDownsampleCompute:
         isInteracting && hasInitialFrame &&
         // When cap is 0 the stale indirect-args from the last non-zero compute
         // would replay the previous frame's draw count — force compute so the
         // downsample early-return clears the args to zero.
-        effectiveDownsampleMaxPoints > 0 &&
-        performance.now() - lastFullComputeAt < COMPUTE_REFRESH_INTERVAL_MS,
+        effectiveDownsampleMaxPoints > 0,
       isGis,
       ...viewingParams,
     });
@@ -489,10 +490,7 @@
       // We can't tell from setProps whether the renderer chose the skip
       // path — the next render() does. Approximate: any frame that wasn't
       // configured to skip is a "full" frame.
-      const willCompute =
-        !isInteracting ||
-        !hasInitialFrame ||
-        performance.now() - lastFullComputeAt >= COMPUTE_REFRESH_INTERVAL_MS;
+      const willCompute = !isInteracting || !hasInitialFrame;
       if (willCompute) {
         lastFullComputeAt = performance.now();
         hasInitialFrame = true;

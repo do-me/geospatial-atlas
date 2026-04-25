@@ -51,7 +51,7 @@ export default defineConfig({
       // Drive only when you set PERF_PARQUET_FILE — the spec early-skips
       // otherwise so this project is safe to leave in the default list.
       name: "perf-chrome",
-      testMatch: /(perf-75m|pan-visibility|pan-screencast|wg-sweep)\.spec\.ts$/,
+      testMatch: /(perf-75m|pan-visibility|pan-screencast|wg-sweep|europe-300m)\.spec\.ts$/,
       timeout: 20 * 60 * 1000,
       use: {
         channel: "chrome",

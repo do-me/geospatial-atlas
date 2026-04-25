@@ -226,26 +226,24 @@ def _fast_load(
 
     result = fast_load_parquet(dataset_path, progress=_emit_progress, limit=limit)
 
-    # Add an __row_index__ column to the DuckDB table (used by the viewer).
-    # Note: PRAGMA table_info rows are (cid, name, type, notnull, dflt, pk) —
-    # the column NAME is r[1], not r[0].
+    # ``fast_load_parquet`` returns a view-backed connection — every
+    # query reads column chunks straight from the on-disk parquet via
+    # DuckDB's ``read_parquet``. The reader's ``file_row_number``
+    # virtual column is already projected under ``id_column`` for the
+    # viewer; no ALTER TABLE / UPDATE pass needed (and ALTER TABLE
+    # against a view would fail anyway).
+    #
+    # We deliberately do not flip ``enable_external_access`` off here —
+    # the view depends on read_parquet being able to open the source
+    # file on every query. The desktop sidecar binds 127.0.0.1 only and
+    # is launched against a single user-chosen file, so the marginal
+    # exposure (an SQL endpoint that can read other local files) is
+    # bounded by the loopback bind.
     con = result.connection
-    id_col = "__row_index__"
+    id_col = result.id_column
     existing_cols: list[str] = [
         r[1] for r in con.sql(f'PRAGMA table_info("{result.table}")').fetchall()
     ]
-    i = 1
-    while id_col in existing_cols:
-        id_col = f"__row_index___{i}"
-        i += 1
-    con.sql(
-        f'ALTER TABLE "{result.table}" ADD COLUMN "{id_col}" BIGINT DEFAULT 0'
-    )
-    con.sql(
-        f'UPDATE "{result.table}" SET "{id_col}" = rowid'
-    )
-    con.sql("SET enable_external_access = false")
-    con.sql("SET lock_configuration = true")
 
     # Validate the text column (if provided). Warn but don't fail if the
     # user typed a name that doesn't exist.
@@ -273,6 +271,15 @@ def _fast_load(
         labels=None,
         is_gis=True,
     )
+    # Surface the loader's bbox so the viewer issues u16-quantised
+    # scatter queries — 5 B/point instead of 9 B/point on the wire.
+    # Critical at 322 M-row scale: ~1.4 GB saved per full scatter pull.
+    if result.x_bounds is not None and result.y_bounds is not None:
+        projection = props.setdefault("data", {}).setdefault("projection", {})
+        projection["bounds"] = {
+            "x": list(result.x_bounds),
+            "y": list(result.y_bounds),
+        }
     metadata = {"props": props}
     identifier = sha256_hexdigest(
         [__version__, [dataset_path], metadata], scope="DataSource"

@@ -313,12 +313,50 @@ def _try_fast_load(
         print(f"(fast loader unavailable: {e} — falling back to pandas)")
         return None
 
-    # Wire x_column / y_column overrides — the fast path only returns
-    # auto-detected columns; users may override.
-    if x_column and x_column != result.x_column:
-        return None  # fall back to slow path
-    if y_column and y_column != result.y_column:
-        return None
+    # Honor ``--x`` / ``--y`` overrides without falling back to pandas —
+    # the fast loader has already exposed every parquet column via the
+    # view, so re-labelling x/y is just metadata. We re-compute bounds
+    # for the chosen columns; that's a single column-stat read (~1 s
+    # even on 15+ GB files).
+    if x_column or y_column:
+        cols_lower = {c.lower(): c for c in result.columns}
+        if x_column and x_column.lower() not in cols_lower:
+            print(
+                f"(--x {x_column!r} not found in dataset; "
+                f"falling back to pandas to honor the override)"
+            )
+            return None
+        if y_column and y_column.lower() not in cols_lower:
+            print(
+                f"(--y {y_column!r} not found in dataset; "
+                f"falling back to pandas to honor the override)"
+            )
+            return None
+        new_x = cols_lower[x_column.lower()] if x_column else result.x_column
+        new_y = cols_lower[y_column.lower()] if y_column else result.y_column
+        if (new_x, new_y) != (result.x_column, result.y_column):
+            print(f"  [override] x={new_x}, y={new_y}")
+            result.x_column = new_x
+            result.y_column = new_y
+            # Bounds are tied to whichever columns are x/y, so refresh.
+            result.x_bounds = None
+            result.y_bounds = None
+            try:
+                from .fast_load import quote_ident
+
+                row = result.connection.sql(
+                    f"SELECT MIN({quote_ident(new_x)}), MAX({quote_ident(new_x)}), "
+                    f"MIN({quote_ident(new_y)}), MAX({quote_ident(new_y)}) "
+                    f"FROM {quote_ident(result.table)}"
+                ).fetchone()
+                if row is not None and all(v is not None for v in row):
+                    x_min, x_max, y_min, y_max = (float(v) for v in row)
+                    if x_max > x_min:
+                        result.x_bounds = (x_min, x_max)
+                    if y_max > y_min:
+                        result.y_bounds = (y_min, y_max)
+            except Exception:
+                pass
     return result
 
 
@@ -345,18 +383,11 @@ def _run_fast_path(
     from .version import __version__
 
     con = fast_connection.connection
-    # Ensure the viewer has an id column.
-    # PRAGMA table_info rows are (cid, name, type, ...) — r[1] is the column name.
-    cols = [r[1] for r in con.sql(f'PRAGMA table_info("{fast_connection.table}")').fetchall()]
-    id_col = "__row_index__"
-    i = 1
-    while id_col in cols:
-        id_col = f"__row_index___{i}"
-        i += 1
-    con.sql(
-        f'ALTER TABLE "{fast_connection.table}" ADD COLUMN "{id_col}" BIGINT DEFAULT 0'
-    )
-    con.sql(f'UPDATE "{fast_connection.table}" SET "{id_col}" = rowid')
+    # ``fast_load_parquet`` already provisioned a stable per-row id by
+    # projecting the parquet reader's ``file_row_number`` virtual column.
+    # No ALTER TABLE / UPDATE needed — and importantly cannot be done on
+    # a view, which is what the loader now produces.
+    id_col = fast_connection.id_column
 
     props = make_embedding_atlas_props(
         row_id=id_col,
