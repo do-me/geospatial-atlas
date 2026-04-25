@@ -7,6 +7,66 @@ releases used the `app-vX.Y.Z` prefix). Other streams (Python package,
 static web viewer) have their own changelogs / tag prefixes — see
 [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## v0.0.7 — 2026-04-25
+
+**300 M-row scaling.** The loader, wire transport, and WebGPU renderer
+now hold a fluent UX on parquet files with hundreds of millions of
+points. Tested end-to-end through the packaged Electron desktop app
+on a 300 M-row synthetic Europe parquet (6.6 GiB on disk).
+
+### Performance — 300 M points
+
+| stage                           | result                              |
+| ------------------------------- | ----------------------------------- |
+| `fast_load_parquet` (cold)      | 2.4 s                               |
+| Initial scatter (Arrow IPC)     | 9.4 s for 1.20 GB on the wire       |
+| Color-by category fetch         | 11.9 s for 1.50 GB on the wire      |
+| 10 s scripted pan inside window | 332 CSS-pans : 3 GPU re-renders     |
+| Zoom re-render                  | 1.0 – 1.5 s                         |
+
+### Changed
+
+- **Renderer:** the downsample / compaction passes are now skipped for
+  the entire duration of a drag or zoom gesture (they previously fired
+  every ~200 ms during a long pan and ratcheted hundreds of MB of
+  intermediate GPU buffers, eventually triggering macOS jetsam at
+  100 M+ points). Re-compute happens once on gesture release.
+- **Renderer:** the WebGPU accumulate pipeline's Y-stride was bumped
+  from 4096 to 65536 so the dispatch axis stays under the 65535 cap
+  past 4 billion points. Without this, datasets near 268 M overflowed
+  the dispatch and rendered an empty canvas.
+- **Loader:** `fast_load_parquet` now pins DuckDB's `memory_limit` and
+  `temp_directory` before any heavy SQL, projects the parquet reader's
+  `file_row_number` as `__row_index__` at load time (no separate
+  `ALTER TABLE … UPDATE` pass), and surfaces `(x, y)` bounds on its
+  result so the wire layer can quantise scatter to `u16` (~44 % wire
+  savings).
+- **Wire:** the FastAPI server now `StreamingResponse`s Arrow IPC
+  bodies above 256 MiB in 4 MiB chunks. Uvicorn's default response
+  path silently dropped multi-hundred-MB byte payloads at 300 M rows.
+
+### Fixed
+
+- `electron .` (dev launch) no longer mis-detects the literal `"."`
+  argument as an initial dataset. `initialDatasetFromArgv()` now also
+  requires `isSupportedDataset()`, so the env-var path takes over and
+  any future "Open With" of an unsupported file gets a clean error
+  from the shell instead of a confused `FileNotFoundError` from inside
+  the sidecar.
+
+### Internal / build
+
+- New `scripts/bench/` directory with a DuckDB-backed
+  random-points-over-Europe generator, structural validator, per-stage
+  loader timer, HTTP+Arrow wire bench, and an end-to-end orchestrator.
+- New Playwright projects: `perf-chrome` runs `e2e/europe-300m.spec.ts`
+  in real Chrome; `desktop-electron` drives the actual packaged
+  Electron shell (sidecar + UI) via `_electron` to assert the same
+  CSS-pan-dominates-GPU-rerender contract end-to-end.
+- Tag scheme switched from `app-vX.Y.Z` to `vX.Y.Z` so Zenodo's
+  GitHub auto-DOI integration archives clean version strings.
+  Historical `app-v0.0.1` … `app-v0.0.6` releases are left intact.
+
 ## app-v0.0.4 — 2026-04-20
 
 **Shell migration: Tauri → Electron.** The native shell has been

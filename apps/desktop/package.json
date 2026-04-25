@@ -1,7 +1,7 @@
 {
   "name": "geospatial-atlas-desktop",
   "private": true,
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Desktop viewer for geospatial & embedding data — Electron shell wrapping the Geospatial Atlas viewer + Python sidecar.",
   "homepage": "https://github.com/do-me/geospatial-atlas",
   "author": {
