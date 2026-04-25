@@ -358,10 +358,15 @@ function registerIpcHandlers() {
 function initialDatasetFromArgv(): string | null {
   // Packaged apps get the dataset path as a positional arg (if any).
   // argv[0] is the app binary; argv[1..] may include flags or a file.
+  // Require both existsSync AND a supported extension so launching the
+  // dev shell with `.` as the entry doesn't get mis-detected as a
+  // dataset (and so a future user dragging a non-data file via OS
+  // "Open With" gets a clear "unsupported" error instead of a confused
+  // sidecar crash).
   const args = app.isPackaged ? process.argv.slice(1) : process.argv.slice(2);
   for (const a of args) {
     if (a.startsWith("-")) continue;
-    if (existsSync(a)) return a;
+    if (existsSync(a) && isSupportedDataset(a)) return a;
   }
   return process.env["GEOSPATIAL_ATLAS_INITIAL_DATASET"] ?? null;
 }

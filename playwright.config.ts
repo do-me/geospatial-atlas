@@ -46,6 +46,15 @@ export default defineConfig({
       use: { browserName: "chromium" },
     },
     {
+      // Drives the actual Electron desktop app (uses Playwright's
+      // _electron API). Requires the PyInstaller sidecar to be built
+      // (apps/desktop/python-sidecar/build.sh) and a vite UI dev server
+      // running on http://127.0.0.1:1420.
+      name: "desktop-electron",
+      testMatch: /desktop-electron-.*\.spec\.ts$/,
+      timeout: 20 * 60 * 1000,
+    },
+    {
       // Real-Chrome project for the perf benchmark (default Chromium build
       // does not ship the WebGPU pipeline cache that Atlas relies on).
       // Drive only when you set PERF_PARQUET_FILE — the spec early-skips
