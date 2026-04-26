@@ -25,18 +25,24 @@ export interface EmbeddingViewMosaicProps {
   y: string;
 
   /** Axis-aligned bounds for (x, y) in data units. If provided, the scatter
-   *  query packs coordinates as u16 on the wire and unpacks to f32 on the
-   *  client — roughly halving the bytes shipped for the main point query.
-   *  Leave unset to stream f32 directly. */
+   *  query packs coordinates as u32 on the wire and unpacks to f32 on the
+   *  client GPU — quantum is ~range / (2³² − 1), well below sub-pixel at
+   *  any zoom (1.5 cm at the eubucco 40°-lon span). Leave unset to stream
+   *  f32 directly. */
   bounds?: { x: [number, number]; y: [number, number] } | null;
 
-  /** Names of pre-computed u16-quantised x/y columns on the source table.
+  /** Names of pre-computed u32-quantised x/y columns on the source table.
    *  When set, the scatter query becomes a pure ``SELECT x_u16, y_u16``
    *  scan — no per-row arithmetic, no bounds clamps. The loader fills
    *  these at CTAS time once the bounds are known.
    *
+   *  Field names ``x_u16`` / ``y_u16`` are kept as opaque identifiers
+   *  for backwards compatibility with stored configs — the actual wire
+   *  type is now u32 (a Uint32Array arrives over the wire), and the
+   *  renderer dispatches a u32→f32 unpack pass on the GPU.
+   *
    *  Requires `bounds` to be set as well (the same linear map is used
-   *  to unpack u16 → f32 on the client side). */
+   *  to unpack u32 → f32 on the client side). */
   precomputed?: {
     x_u16: string;
     y_u16: string;

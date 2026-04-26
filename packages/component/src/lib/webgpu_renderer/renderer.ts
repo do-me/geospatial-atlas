@@ -87,8 +87,8 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
   private renderInputs: RenderInputs;
   private dataBuffers: DataBuffers;
   private renderer: Node<(props: EmbeddingRendererProps, textureView: GPUTextureView) => void>;
-  /** GPU-side u16 unpack pipeline (compute pipeline + bind-group layout
-   *  only — the per-dispatch u16 source + uniform buffers are allocated
+  /** GPU-side u32 unpack pipeline (compute pipeline + bind-group layout
+   *  only — the per-dispatch u32 source + uniform buffers are allocated
    *  ephemerally inside ``runUnpack`` and defer-destroyed). The downstream
    *  ``dataBuffers.x``/``y`` f32 storage buffers are filled by this
    *  pipeline rather than by a JS-side ``Float32Array(N)`` allocation. */
@@ -98,10 +98,19 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
    *  change — Mosaic occasionally re-emits the same arrow batch on a
    *  filter rebind, and a redundant 322 M-element compute dispatch is
    *  expensive enough to make worth skipping. */
-  private lastXPacked: Uint16Array<ArrayBuffer> | null = null;
-  private lastYPacked: Uint16Array<ArrayBuffer> | null = null;
+  private lastXPacked: Uint32Array<ArrayBuffer> | null = null;
+  private lastYPacked: Uint32Array<ArrayBuffer> | null = null;
   private lastCoordsBoundsX: [number, number] | null = null;
   private lastCoordsBoundsY: [number, number] | null = null;
+  /** Promise chain for the (X, Y) unpack pair. We chain so each call
+   *  awaits the previous unpack's defer-destroy before allocating its
+   *  own u32 source — keeping peak GPU residency at one ephemeral u32
+   *  source at a time (1.288 GB on 322 M), instead of two simultaneously
+   *  (which would push the GPU process past the ~4 GB cap). The render
+   *  loop ``await``s this before submitting render commands so the f32
+   *  destinations are guaranteed populated by the time the draw reads
+   *  them. */
+  private _unpackInFlight: Promise<void> = Promise.resolve();
 
   constructor(
     context: GPUCanvasContext,
@@ -182,11 +191,11 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
     this.device = df.value(device);
     this.dataBuffers = makeDataBuffers(df, this.device, this.renderInputs);
     // The pipeline itself is cheap to compile (one ~30-line WGSL kernel)
-    // and lives for the device's lifetime. The u16 source + uniform
+    // and lives for the device's lifetime. The u32 source + uniform
     // buffers a dispatch needs are allocated fresh per call inside
-    // ``runUnpack`` — keeping ~644 MB of persistent u16 GPU memory off
-    // the books at 322 M points (which previously crashed the GPU
-    // process on cold load against a stock 4 GB tab budget).
+    // ``runUnpack`` — keeping ~1.288 GB of persistent u32 GPU memory
+    // off the books at 322 M points (the persistent dataflow node would
+    // crash the GPU process on cold load against the ~4 GB cap).
     this.unpack = makeUnpackPipeline(df, this.device);
     const moduleCode = this.useF16 ? programCode : f32ProgramOf(programCode);
     this.module = df.derive([this.device], (device) => device.createShaderModule({ code: moduleCode }));
@@ -220,7 +229,7 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
       this.props.isGis,
     );
     // Decide which fill path is active. Packed mode requires both axes
-    // to be u16 + their bounds — partial coverage falls back to the
+    // to be u32 + their bounds — partial coverage falls back to the
     // f32 path (the renderer never mixes fill paths within a frame).
     const usePacked =
       this.props.xPacked != null &&
@@ -271,16 +280,22 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
     return needsRender;
   }
 
-  /** Run the GPU u16 → f32 unpack pass when (a) the packed buffer
+  /** Run the GPU u32 → f32 unpack pass when (a) the packed buffer
    *  reference changed *or* (b) the bounds changed. We materialise
    *  ``dataBuffers.x``/``y`` first (their factories observe the new
    *  ``count``) so they're sized to fit before the unpack writes into
    *  them. Skipped on identical re-emit — Mosaic occasionally re-fires
    *  the same arrow batch, and a redundant 322 M-element compute
-   *  dispatch costs both watt-hours and post-pan latency. */
+   *  dispatch costs both watt-hours and post-pan latency.
+   *
+   *  X and Y are sequenced (X submit + drain + destroy, *then* Y) so
+   *  only one ephemeral 1.288 GB u32 source is alive at a time. The
+   *  chain is exposed via ``unpackInFlight`` so the render loop can
+   *  ``await`` it before drawing — without that, the post-data-load
+   *  frame would render against a half-populated f32 destination. */
   private maybeRunUnpack(
-    xPacked: Uint16Array<ArrayBuffer>,
-    yPacked: Uint16Array<ArrayBuffer>,
+    xPacked: Uint32Array<ArrayBuffer>,
+    yPacked: Uint32Array<ArrayBuffer>,
     boundsX: [number, number],
     boundsY: [number, number],
     count: number,
@@ -293,36 +308,66 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
     // A single storage-buffer binding > device limit silently drops
     // its dispatch on Dawn (the validation error fires on
     // ``uncapturederror`` and the bind group is left as a hole). A
-    // clear console.error beats a blank canvas. The f32 destinations
-    // are the largest binding in the unpack bind group.
-    const f32BindBytes = count * 4;
+    // clear console.error beats a blank canvas. With u32 the source
+    // binding is now the same size as the f32 destination (count * 4),
+    // so checking either is sufficient.
+    const bindBytes = count * 4;
     const limit = this.gpuDevice.limits.maxStorageBufferBindingSize;
-    if (f32BindBytes > limit) {
+    if (bindBytes > limit) {
       console.error(
-        `[atlas-gpu] f32 storage binding ${f32BindBytes} bytes exceeds maxStorageBufferBindingSize ${limit} — unpack skipped (count=${count}). Consider splitting the dataset.`,
+        `[atlas-gpu] storage binding ${bindBytes} bytes exceeds maxStorageBufferBindingSize ${limit} — unpack skipped (count=${count}). Consider splitting the dataset.`,
       );
       return;
     }
     const pipeline = this.unpack.pipeline.value;
     const layout = this.unpack.bindGroupLayout.value;
-    if (!sameX) {
-      const xDest = this.dataBuffers.x.value;
-      runUnpack(this.gpuDevice, pipeline, layout, xPacked, xDest, {
-        min: boundsX[0],
-        max: boundsX[1],
+    const device = this.gpuDevice;
+    // Capture refs to the destination buffers and bounds *now* — they
+    // could change before the chain executes. The chain itself fetches
+    // ``dataBuffers.x.value`` lazily at run time so a count-driven
+    // re-derive lands in the right place.
+    const runX = !sameX;
+    const runY = !sameY;
+    const boundsXCopy: [number, number] = [boundsX[0], boundsX[1]];
+    const boundsYCopy: [number, number] = [boundsY[0], boundsY[1]];
+    // Self-healing chain: ``.catch`` swallows a poisoned previous chain
+    // (e.g. device.lost mid-unpack) so subsequent maybeRunUnpack calls
+    // can still queue work. The render loop's own watchdog already
+    // surfaces the underlying device failure.
+    this._unpackInFlight = this._unpackInFlight
+      .catch(() => {})
+      .then(async () => {
+        if (runX) {
+          const xDest = this.dataBuffers.x.value;
+          await runUnpack(device, pipeline, layout, xPacked, xDest, {
+            min: boundsXCopy[0],
+            max: boundsXCopy[1],
+          });
+          this.lastXPacked = xPacked;
+          this.lastCoordsBoundsX = boundsXCopy;
+        }
+        if (runY) {
+          const yDest = this.dataBuffers.y.value;
+          await runUnpack(device, pipeline, layout, yPacked, yDest, {
+            min: boundsYCopy[0],
+            max: boundsYCopy[1],
+          });
+          this.lastYPacked = yPacked;
+          this.lastCoordsBoundsY = boundsYCopy;
+        }
+      })
+      .catch((err) => {
+        console.error("[atlas-gpu] u32 unpack chain failed:", err);
       });
-      this.lastXPacked = xPacked;
-      this.lastCoordsBoundsX = [boundsX[0], boundsX[1]];
-    }
-    if (!sameY) {
-      const yDest = this.dataBuffers.y.value;
-      runUnpack(this.gpuDevice, pipeline, layout, yPacked, yDest, {
-        min: boundsY[0],
-        max: boundsY[1],
-      });
-      this.lastYPacked = yPacked;
-      this.lastCoordsBoundsY = [boundsY[0], boundsY[1]];
-    }
+  }
+
+  /** Promise that resolves when the most recently scheduled unpack
+   *  chain has fully landed (X submit + drain + destroy, then Y same).
+   *  Render-loop callers should ``await`` this before submitting a
+   *  draw so the f32 storage buffers are populated when the vertex
+   *  shader reads them. */
+  get unpackInFlight(): Promise<void> {
+    return this._unpackInFlight;
   }
 
   render(): void {
@@ -370,7 +415,7 @@ export interface RenderInputs {
   mode: ValueNode<RenderMode>;
   colorScheme: ValueNode<"light" | "dark">;
   /** Canonical point count — drives storage-buffer sizing regardless of
-   *  whether the active fill path is f32 (``xData``) or packed u16
+   *  whether the active fill path is f32 (``xData``) or packed u32
    *  (``setProps`` runs the unpack compute pass). */
   count: ValueNode<number>;
   xData: ValueNode<Float32Array<ArrayBuffer>>;

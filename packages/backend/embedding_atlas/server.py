@@ -205,7 +205,7 @@ def make_server(
             headers={
                 # Force the browser to refetch on every reload — otherwise stale
                 # bounds/precomputed hints from a prior server config can drive
-                # the viewer to issue u16-quantised queries against a server
+                # the viewer to issue u32-quantised queries against a server
                 # that no longer advertises (or has) the precomputed columns.
                 "Cache-Control": "no-store, no-cache, must-revalidate",
             },

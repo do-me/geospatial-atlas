@@ -248,33 +248,52 @@ def test_geometry_column_extraction(wkb_parquet):
 
 
 def test_precomputed_quantised_columns_present(latlon_parquet):
-    """When bounds are computable, the loader bakes __x_u16__/__y_u16__
+    """When bounds are computable, the loader bakes __x_u32__/__y_u32__
     into the CTAS so the wire scatter query becomes a pure scan."""
     path, n = latlon_parquet
     res = fast_load_parquet(str(path))
-    assert res.quantised_x_column == "__x_u16__"
-    assert res.quantised_y_column == "__y_u16__"
+    assert res.quantised_x_column == "__x_u32__"
+    assert res.quantised_y_column == "__y_u32__"
     con = res.connection
     cols = [r[1] for r in con.sql(f'PRAGMA table_info("{res.table}")').fetchall()]
-    assert "__x_u16__" in cols
-    assert "__y_u16__" in cols
-    # The u16 values must round-trip back to the original lon/lat (within
-    # the quantisation grid, ~range/65535).
+    assert "__x_u32__" in cols
+    assert "__y_u32__" in cols
+    # The u32 values must round-trip back to the original lon/lat (within
+    # the quantisation grid, ~range/(2^32-1)).
+    U32_MAX = 4_294_967_295
     rows = con.sql(
-        f'SELECT lon, lat, "__x_u16__", "__y_u16__" FROM "{res.table}" LIMIT 5'
+        f'SELECT lon, lat, "__x_u32__", "__y_u32__" FROM "{res.table}" LIMIT 5'
     ).fetchall()
     x_min, x_max = res.x_bounds  # type: ignore[misc]
     y_min, y_max = res.y_bounds  # type: ignore[misc]
     x_range = x_max - x_min
     y_range = y_max - y_min
     for lon, lat, xq, yq in rows:
-        assert 0 <= xq <= 65535
-        assert 0 <= yq <= 65535
+        assert 0 <= xq <= U32_MAX
+        assert 0 <= yq <= U32_MAX
         # Reconstructed value must be within one quantum of original.
-        x_recon = x_min + xq * (x_range / 65535)
-        y_recon = y_min + yq * (y_range / 65535)
-        assert abs(x_recon - lon) <= x_range / 65535 + 1e-9
-        assert abs(y_recon - lat) <= y_range / 65535 + 1e-9
+        x_recon = x_min + xq * (x_range / U32_MAX)
+        y_recon = y_min + yq * (y_range / U32_MAX)
+        assert abs(x_recon - lon) <= x_range / U32_MAX + 1e-9
+        assert abs(y_recon - lat) <= y_range / U32_MAX + 1e-9
+
+
+def test_u32_quantum_below_subpixel_at_city_zoom(latlon_parquet):
+    """Quantum at typical GIS bounds must be well below sub-pixel even
+    at street-level zoom — this is the entire reason for going u32.
+
+    Concrete check: simulate the eubucco lon span (40°) and assert the
+    u32 quantum is < 1 cm. The prior u16 path had ~110 m per step which
+    showed up as a visible street-level grid in the viewer."""
+    # Simulated eubucco extent (loader doesn't actually need this — it's
+    # a pure arithmetic check on the constant we use).
+    lon_range_m = 40.0 * 111_320.0  # 40° × ~111 km/° at the equator
+    U32_MAX = 4_294_967_295
+    quantum_m = lon_range_m / U32_MAX
+    assert quantum_m < 0.01, (
+        f"u32 quantum {quantum_m * 1000:.4f} mm — must be < 10 mm to "
+        f"avoid visible grid at street zoom"
+    )
 
 
 def test_precomputed_disabled_via_flag(latlon_parquet):
@@ -283,7 +302,7 @@ def test_precomputed_disabled_via_flag(latlon_parquet):
     assert res.quantised_x_column is None
     assert res.quantised_y_column is None
     cols = [r[1] for r in res.connection.sql(f'PRAGMA table_info("{res.table}")').fetchall()]
-    assert "__x_u16__" not in cols
+    assert "__x_u32__" not in cols
 
 
 def test_low_cardinality_varchar_becomes_enum(tmp_path):

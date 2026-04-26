@@ -1,9 +1,11 @@
 // Copyright (c) 2025 Apple Inc. Licensed under MIT License.
 //
-// One-shot u16 → f32 unpack. Input is packed as ``array<u32>`` where two
-// adjacent u16 share each u32 (little-endian: index 2k in the low 16 bits,
-// index 2k+1 in the high 16 bits — matches Uint16Array memory layout on
-// little-endian hosts, which is every Atlas-supported platform).
+// One-shot u32 → f32 unpack. Input is ``array<u32>`` — one element per
+// coordinate, no bit-packing — because u32 is already the natural WGSL
+// storage-buffer element width. (The earlier u16 cut shared 2-per-u32
+// to halve the wire bytes; with u32 we trade that wire saving for ~65k×
+// finer quantisation, which is what kills the street-level grid at
+// continental-extent GIS bbox.)
 //
 // The dispatch writes one f32 per invocation into ``f32_buffer``.
 //
@@ -17,14 +19,14 @@
 
 struct UnpackParams {
   count: u32,
-  // Linear inverse-map: f32 = min + u16 * scale, where scale = (max - min) / 65535.
+  // Linear inverse-map: f32 = min + u32 * scale, where scale = (max - min) / (2^32 - 1).
   min: f32,
   scale: f32,
   // Padding so the struct is 16-byte aligned (WGSL uniform buffer rule).
   _padding: u32,
 }
 
-@group(0) @binding(0) var<storage, read> u16_buffer: array<u32>;
+@group(0) @binding(0) var<storage, read> u32_buffer: array<u32>;
 @group(0) @binding(1) var<storage, read_write> f32_buffer: array<f32>;
 @group(0) @binding(2) var<uniform> params: UnpackParams;
 
@@ -41,8 +43,9 @@ override UNPACK_STRIDE: u32 = 65536u;
 fn unpack(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = id.y * UNPACK_STRIDE + id.x;
   if (i >= params.count) { return; }
-  let pair = u16_buffer[i >> 1u];
-  let shift = (i & 1u) * 16u;
-  let u16_value = (pair >> shift) & 0xFFFFu;
-  f32_buffer[i] = params.min + f32(u16_value) * params.scale;
+  // f32 → u32 promotion is lossy past 2^24 (mantissa width), but here
+  // f32(u32) is only an intermediate for the FMA — the final f32 result
+  // sits in the bbox span so the relative error stays well below the
+  // u32 quantum's f32-representable precision.
+  f32_buffer[i] = params.min + f32(u32_buffer[i]) * params.scale;
 }

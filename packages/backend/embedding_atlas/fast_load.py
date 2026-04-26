@@ -91,17 +91,20 @@ class FastLoadResult:
     # Axis-aligned bounding box over (x_column, y_column). ``None`` if the
     # bounds query raised (e.g. spatial-extension edge cases on exotic
     # geometries). Consumers use these to quantize coordinates for the
-    # wire — the frontend sends a MIN-MAX linear map to pack f32 → u16.
+    # wire — the frontend sends a MIN-MAX linear map to pack f32 → u32.
     x_bounds: tuple[float, float] | None = None
     y_bounds: tuple[float, float] | None = None
-    # Pre-computed u16-quantised x/y column names (or ``None`` if bounds
+    # Pre-computed u32-quantised x/y column names (or ``None`` if bounds
     # weren't available at CTAS time). When present, the wire scatter
-    # query is just ``SELECT __x_u16__, __y_u16__ FROM dataset`` — no
+    # query is just ``SELECT __x_u32__, __y_u32__ FROM dataset`` — no
     # per-row arithmetic, no clamps, ~6× faster than the on-the-fly cast
-    # at 300 M-row scale.
+    # at 300 M-row scale. u32 (vs the u16 first cut) gives 65 536× finer
+    # quantisation — at the eubucco 40°-lon span that's 1.5 cm per step
+    # vs 110 m per step, killing the visible street-level grid pattern
+    # without losing the wire-pack performance win.
     quantised_x_column: str | None = None
     quantised_y_column: str | None = None
-    # Mercator-projected y, also packed as u16 over [merc_y_min, merc_y_max].
+    # Mercator-projected y, also packed as u32 over [merc_y_min, merc_y_max].
     # Only populated when ``y`` is in geographic latitude space (-90..90 deg);
     # ``merc_y_bounds`` is the linear range to use for unpacking on the wire.
     # Lets the GIS fast-path skip the JS-side Mercator loop entirely (~5.9 s
@@ -400,7 +403,7 @@ def fast_load_parquet(
 
     # Build the CTAS SELECT list with: passthrough columns (with ENUM
     # casts where applicable), synthetic coords (geometry path), pre-
-    # quantised __x_u16__/__y_u16__ when we have bounds, and the row id.
+    # quantised __x_u32__/__y_u32__ when we have bounds, and the row id.
     quant_x_col: str | None = None
     quant_y_col: str | None = None
 
@@ -444,29 +447,35 @@ def fast_load_parquet(
     quant_merc_y_col: str | None = None
     merc_y_bounds: tuple[float, float] | None = None
     if precompute_quantised and x_bounds is not None and y_bounds is not None:
-        quant_x_col = _unused_name(columns + [id_column, x_out, y_out], "__x_u16__")
-        quant_y_col = _unused_name(columns + [id_column, x_out, y_out, quant_x_col], "__y_u16__")
+        quant_x_col = _unused_name(columns + [id_column, x_out, y_out], "__x_u32__")
+        quant_y_col = _unused_name(columns + [id_column, x_out, y_out, quant_x_col], "__y_u32__")
         x_min, x_max = x_bounds
         y_min, y_max = y_bounds
-        x_scale = 65535.0 / (x_max - x_min)
-        y_scale = 65535.0 / (y_max - y_min)
+        # u32 quant: 4 294 967 295 = 2³² − 1 distinct buckets per axis.
+        # Quant step at the eubucco lon span (~40°) is 4444 km / 2³² ≈
+        # 1 mm — well below sub-pixel even at street zoom. (u16 was 110 m,
+        # which produced a visible grid the moment a user zoomed past
+        # ~city scale.)
+        U32_MAX = 4_294_967_295
+        x_scale = U32_MAX / (x_max - x_min)
+        y_scale = U32_MAX / (y_max - y_min)
         # GREATEST/LEAST runs once at load — paranoid safety against
         # NULLs / edge bound rows (NULLs cast to NULL in DuckDB; clamps
         # squash any near-bound float drift). After this, the wire path
-        # can be a clamp-free SELECT __x_u16__, __y_u16__.
+        # can be a clamp-free SELECT __x_u32__, __y_u32__.
         x_q_expr = (
-            f"GREATEST(0, LEAST(65535, "
+            f"GREATEST(0, LEAST({U32_MAX}, "
             f"((COALESCE({quote_ident(x_out)}, {x_min}) - ({x_min!r})) * {x_scale!r}))"
-            f")::USMALLINT"
+            f")::UINTEGER"
         )
         y_q_expr = (
-            f"GREATEST(0, LEAST(65535, "
+            f"GREATEST(0, LEAST({U32_MAX}, "
             f"((COALESCE({quote_ident(y_out)}, {y_min}) - ({y_min!r})) * {y_scale!r}))"
-            f")::USMALLINT"
+            f")::UINTEGER"
         )
         quant_clause = f", {x_q_expr} AS {quote_ident(quant_x_col)}, {y_q_expr} AS {quote_ident(quant_y_col)}"
 
-        # Mercator-projected y, also packed as u16. For GIS datasets the
+        # Mercator-projected y, also packed as u32. For GIS datasets the
         # browser would otherwise have to project lat→Mercator on the JS
         # main thread for every row before paint — ~5.9 s on 322 M rows.
         # Pre-projecting at view-definition time pushes that into DuckDB's
@@ -481,18 +490,18 @@ def fast_load_parquet(
             merc_y_min = math.log(math.tan(math.pi / 4 + y_min * math.pi / 360)) * 180 / math.pi
             merc_y_max = math.log(math.tan(math.pi / 4 + y_max * math.pi / 360)) * 180 / math.pi
             if merc_y_max > merc_y_min:
-                merc_y_scale = 65535.0 / (merc_y_max - merc_y_min)
+                merc_y_scale = U32_MAX / (merc_y_max - merc_y_min)
                 quant_merc_y_col = _unused_name(
                     columns + [id_column, x_out, y_out, quant_x_col, quant_y_col],
-                    "__y_merc_u16__",
+                    "__y_merc_u32__",
                 )
-                # Inline mercator(lat) → linear-pack to u16. The CASE on
+                # Inline mercator(lat) → linear-pack to u32. The CASE on
                 # COALESCE keeps NULL → 0 (clamped to mid-band) without
                 # exploding tan() near the poles for legitimate edge values.
                 merc_q_expr = (
-                    f"GREATEST(0, LEAST(65535, "
+                    f"GREATEST(0, LEAST({U32_MAX}, "
                     f"(((LN(TAN(PI()/4 + COALESCE({quote_ident(y_out)}, {y_min}) * PI() / 360)) * 180 / PI()) - ({merc_y_min!r})) * {merc_y_scale!r})"
-                    f"))::USMALLINT"
+                    f"))::UINTEGER"
                 )
                 quant_clause += f", {merc_q_expr} AS {quote_ident(quant_merc_y_col)}"
                 merc_y_bounds = (merc_y_min, merc_y_max)
@@ -569,12 +578,13 @@ def fast_load_parquet(
         # groups instead of scanning the whole table. Tooltip latency
         # at 322 M rows: ~10 s → ~50 ms.
         #
-        # Sort key is the precomputed u16 cols, not raw f32: the u16
-        # quantum is wider than the typical tooltip radius in pixels,
-        # so column-major bucketing on (x_u16, y_u16) is what gives
-        # the row groups the tightest possible (x_min, x_max) bounds.
-        # When precompute_quantised was off (no bounds at load time),
-        # we skip the sort — there's no cheap stable key to sort on.
+        # Sort key is the precomputed u32 cols, not raw f32: the u32
+        # quantum is far below the typical tooltip radius in pixels,
+        # so column-major bucketing on (x_u32, y_u32) gives the row
+        # groups the tightest possible (x_min, x_max) bounds at any
+        # zoom. When precompute_quantised was off (no bounds at load
+        # time), we skip the sort — there's no cheap stable key to
+        # sort on.
         if quant_x_col is not None and quant_y_col is not None:
             order_clause = (
                 f" ORDER BY {quote_ident(quant_x_col)}, {quote_ident(quant_y_col)}"

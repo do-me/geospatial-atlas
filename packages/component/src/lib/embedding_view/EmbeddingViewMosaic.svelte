@@ -67,14 +67,14 @@
 
   let xData: Float32Array<ArrayBuffer> = $state.raw(EMPTY_F32);
   let yData: Float32Array<ArrayBuffer> = $state.raw(EMPTY_F32);
-  // Packed wire input — Uint16Array views into the arrow batch when the
-  // u16 wire path is active. ``EmbeddingViewImpl`` forwards these to the
-  // renderer, which uploads them to a u16 GPU storage buffer and unpacks
+  // Packed wire input — Uint32Array views into the arrow batch when the
+  // u32 wire path is active. ``EmbeddingViewImpl`` forwards these to the
+  // renderer, which uploads them to a u32 GPU storage buffer and unpacks
   // to f32 via a one-shot compute pass. Avoids the 2.576 GB JS-side
   // ``Float32Array(322M)`` allocation that previously held the heap at
   // 5+ GB on cold load and broke pan-release on stock 4 GB Chrome tabs.
-  let xPackedData: Uint16Array<ArrayBuffer> | null = $state.raw(null);
-  let yPackedData: Uint16Array<ArrayBuffer> | null = $state.raw(null);
+  let xPackedData: Uint32Array<ArrayBuffer> | null = $state.raw(null);
+  let yPackedData: Uint32Array<ArrayBuffer> | null = $state.raw(null);
   let coordsBoundsX: [number, number] | null = $state.raw(null);
   let coordsBoundsY: [number, number] | null = $state.raw(null);
   let categoryData: Uint8Array<ArrayBuffer> | null = $state.raw(null);
@@ -177,23 +177,30 @@
       categoryCount = approxDensity.categoryCount;
 
       // Wire-packing: when axis-aligned bounds are advertised by the data
-      // source, pack x/y as u16 on the wire (linear min→0, max→65535) and
-      // unpack to f32 on receipt. Payload drops from (f32 + f32 + u8) = 9
-      // bytes/point to (u16 + u16 + u8) = 5 bytes/point — about 44 %
-      // smaller for the 75 M-point scatter query. Quantization error at
-      // the bbox scale is ≤ (range / 65535), well below one screen pixel
-      // for global GIS views.
+      // source, pack x/y as u32 on the wire (linear min→0, max→2³² − 1)
+      // and unpack to f32 on the GPU. u32 is the same wire size as raw
+      // f32 but quantises to ~range / (2³² − 1) — at the eubucco 40°-lon
+      // span that is 1.5 cm per step, sub-pixel at any zoom (the prior
+      // u16 cut quantised to ~110 m and produced a visible street-level
+      // grid the moment the user zoomed past city scale).
+      //
+      // Wire size at 322 M without category: 2.576 GB. Modern V8/Chrome
+      // handle this above the historic 2 GB ceiling on 64-bit hosts; if
+      // a future dataset trips it the fallback is server-side IPC zstd
+      // compression (the table is sorted on the precomputed columns so
+      // adjacent u32 deltas are tiny — zstd squashes the wire to ~10 %).
       //
       // Three SQL paths:
-      //   (A) precomputed + bounds  → SELECT __x_u16__, __y_u16__ — pure
+      //   (A) precomputed + bounds  → SELECT __x_u32__, __y_u32__ — pure
       //       scan, no per-row arithmetic. Loader baked the cast at CTAS.
-      //   (B) bounds only           → ((x - xMin) * xScale)::USMALLINT —
+      //   (B) bounds only           → ((x - xMin) * xScale)::UINTEGER —
       //       single FMA per row, no GREATEST/LEAST clamps. Bounds are
       //       trusted (the loader computed them); near-bound floats may
-      //       round to 65536, but USMALLINT cast wraps to 0 — for our
+      //       round to 2³² but UINTEGER cast wraps to 0 — for our
       //       use-case (sub-pixel quant noise in display coords) that
       //       is invisible. We still defend against NULL via COALESCE.
-      //   (C) no bounds             → f32 passthrough, ~2× the wire bytes.
+      //   (C) no bounds             → f32 passthrough, identical wire
+      //       bytes to (B) but no GPU unpack pass.
       const packed = bounds != null;
       const packedBounds = bounds;
       const precomputedCols = precomputed;
@@ -227,10 +234,11 @@
             // GREATEST/LEAST/ROUND form measured at 300 M.
             const [xMin, xMax] = packedBounds.x;
             const [yMin, yMax] = packedBounds.y;
-            const xScale = 65535 / (xMax - xMin);
-            const yScale = 65535 / (yMax - yMin);
-            xExpr = SQL.sql`((COALESCE(${SQL.column(source.x)}, ${xMin}) - ${xMin}) * ${xScale})::USMALLINT`;
-            yExpr = SQL.sql`((COALESCE(${SQL.column(source.y)}, ${yMin}) - ${yMin}) * ${yScale})::USMALLINT`;
+            const U32_MAX = 4_294_967_295;
+            const xScale = U32_MAX / (xMax - xMin);
+            const yScale = U32_MAX / (yMax - yMin);
+            xExpr = SQL.sql`((COALESCE(${SQL.column(source.x)}, ${xMin}) - ${xMin}) * ${xScale})::UINTEGER`;
+            yExpr = SQL.sql`((COALESCE(${SQL.column(source.y)}, ${yMin}) - ${yMin}) * ${yScale})::UINTEGER`;
           } else {
             xExpr = SQL.sql`${SQL.column(source.x)}::FLOAT`;
             // Server-side Mercator projection (GIS Path C only). Saves
@@ -273,33 +281,33 @@
           const t1 = performance.now();
 
           // Wire format dictates the renderer's fill path. When the
-          // server hands back u16-packed coordinates, we forward the
-          // Uint16Array directly to the renderer so it can upload to a
-          // u16 GPU storage buffer and run the one-shot unpack compute
-          // pass. The previous ``new Float32Array(N)`` round-trip
-          // allocated 1.288 GB *per axis* on the JS heap (2.576 GB
-          // peak) — at 322 M points that's enough on its own to push
-          // a stock 4 GB Chrome tab into a blank-canvas state after
-          // pan-release. The packed path keeps the JS-side footprint
-          // at the wire size (~644 MB per axis), held only long enough
-          // to writeBuffer it across to GPU.
-          let nextXPacked: Uint16Array<ArrayBuffer> | null = null;
-          let nextYPacked: Uint16Array<ArrayBuffer> | null = null;
+          // server hands back u32-packed coordinates, we forward the
+          // Uint32Array directly to the renderer so it can upload to a
+          // u32 GPU storage buffer and run the one-shot unpack compute
+          // pass. Skipping the JS-side ``new Float32Array(N)`` round
+          // trip avoids allocating a *second* 1.288 GB-per-axis copy of
+          // the wire payload on the JS heap — on a 322 M dataset that
+          // alone used to push a stock 4 GB Chrome tab into a
+          // blank-canvas state after pan-release. The packed path keeps
+          // the JS-side footprint at the wire size (one Uint32Array
+          // per axis), held only long enough to writeBuffer it to GPU.
+          let nextXPacked: Uint32Array<ArrayBuffer> | null = null;
+          let nextYPacked: Uint32Array<ArrayBuffer> | null = null;
           let nextBoundsX: [number, number] | null = null;
           let nextBoundsY: [number, number] | null = null;
           let nextX: Float32Array<ArrayBuffer> = EMPTY_F32;
           let nextY: Float32Array<ArrayBuffer> = EMPTY_F32;
-          if (packed && packedBounds != null && (xArray instanceof Uint16Array || yArray instanceof Uint16Array)) {
-            // Coerce in case only one axis came back u16 (Path B can
+          if (packed && packedBounds != null && (xArray instanceof Uint32Array || yArray instanceof Uint32Array)) {
+            // Coerce in case only one axis came back u32 (Path B can
             // emit either; Path A always emits both).
-            if (!(xArray instanceof Uint16Array)) {
-              xArray = xArray != null ? new Uint16Array(xArray) : null;
+            if (!(xArray instanceof Uint32Array)) {
+              xArray = xArray != null ? new Uint32Array(xArray) : null;
             }
-            if (!(yArray instanceof Uint16Array)) {
-              yArray = yArray != null ? new Uint16Array(yArray) : null;
+            if (!(yArray instanceof Uint32Array)) {
+              yArray = yArray != null ? new Uint32Array(yArray) : null;
             }
-            nextXPacked = xArray as Uint16Array<ArrayBuffer>;
-            nextYPacked = yArray as Uint16Array<ArrayBuffer>;
+            nextXPacked = xArray as Uint32Array<ArrayBuffer>;
+            nextYPacked = yArray as Uint32Array<ArrayBuffer>;
             nextBoundsX = [packedBounds.x[0], packedBounds.x[1]];
             nextBoundsY = [packedBounds.y[0], packedBounds.y[1]];
           } else {
@@ -337,7 +345,7 @@
           const n = (xArray as any)?.length ?? 0;
           if (n > 1_000_000) {
             const mb = (((xArray as any)?.byteLength ?? 0) + ((yArray as any)?.byteLength ?? 0) + (categoryArray?.byteLength ?? 0)) / 1024 / 1024;
-            const path = nextXPacked != null ? "u16-direct" : "f32";
+            const path = nextXPacked != null ? "u32-direct" : "f32";
             console.log(
               `[scatter] ${n.toLocaleString()} pts (${mb.toFixed(0)} MB JS heap, ${path}) | toArray=${(t1 - t0).toFixed(0)} ms | typed-array-coerce=${(t2 - t1).toFixed(0)} ms`,
             );

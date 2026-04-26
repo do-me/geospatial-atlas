@@ -10,15 +10,15 @@ export interface EmbeddingRendererProps {
 
   x: Float32Array<ArrayBuffer>;
   y: Float32Array<ArrayBuffer>;
-  /** Optional u16-packed coordinate input. When set, ``x``/``y`` are
+  /** Optional u32-packed coordinate input. When set, ``x``/``y`` are
    *  ignored and the renderer unpacks ``xPacked``/``yPacked`` on the GPU
    *  using ``coordsBoundsX``/``coordsBoundsY`` as the linear inverse-map.
-   *  Saves the JS-side ``Float32Array(N)`` allocation that doubles the
-   *  resident wire payload — at 322 M points that is 2.576 GB of heap
-   *  the user's tab cannot afford. */
-  xPacked?: Uint16Array<ArrayBuffer> | null;
-  yPacked?: Uint16Array<ArrayBuffer> | null;
-  /** Inverse-map bounds for u16 unpack: ``f32 = min + (u16 / 65535) * (max - min)``.
+   *  The u32 width gives sub-mm quantisation at any reasonable bbox so a
+   *  street-level zoom never aliases onto a visible grid (the prior u16
+   *  packing did at ~110 m / quantum on the eubucco 40°-lon span). */
+  xPacked?: Uint32Array<ArrayBuffer> | null;
+  yPacked?: Uint32Array<ArrayBuffer> | null;
+  /** Inverse-map bounds for u32 unpack: ``f32 = min + (u32 / (2³² − 1)) * (max - min)``.
    *  Only consulted when ``xPacked``/``yPacked`` is set. */
   coordsBoundsX?: [number, number] | null;
   coordsBoundsY?: [number, number] | null;
@@ -85,4 +85,12 @@ export interface EmbeddingRenderer {
 
   /** Produce a density map */
   densityMap(width: number, height: number, radius: number, viewportState: ViewportState): Promise<DensityMap>;
+
+  /** Promise that resolves when any in-flight u32 → f32 unpack chain has
+   *  landed (X submit + drain + destroy, then Y same). Render-loop
+   *  callers should ``await`` this before submitting a draw so the f32
+   *  storage buffers are guaranteed populated. Optional — only the
+   *  WebGPU renderer with the packed path emits it; WebGL renderers
+   *  may omit it (the field is then undefined and the caller skips). */
+  readonly unpackInFlight?: Promise<void>;
 }

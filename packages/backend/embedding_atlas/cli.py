@@ -407,15 +407,23 @@ def _run_fast_path(
     #   is 1.8 GB on the wire — under V8's hard 2 GB ArrayBuffer cap that
     #   ``mosaic-core``'s ``response.arrayBuffer()`` allocation depends on.
     #
-    # row_count > 200 M  → u16 wire (Path A: precomputed __x_u16__ /
-    #   __y_u16__ columns from ``fast_load_parquet``). 5 B/point. For
-    #   322 M rows that is 1.6 GB — fits the cap. The grid quantization
-    #   (~611 m × 305 m at global lon/lat extent) is invisible at the
-    #   continental zoom levels at which a 322 M-row dataset is actually
-    #   useful — every grid cell holds dozens of points and the density
-    #   blur smooths over them. At city zoom the density is so high
-    #   (single grid cell ≫ visible pixels) that quantization aliases
-    #   into the same pixel cluster.
+    # row_count > 200 M  → u32 wire (Path A: precomputed __x_u32__ /
+    #   __y_u32__ columns from ``fast_load_parquet``). 9 B/point with a
+    #   category column, 8 B/point without — same on-the-wire size as
+    #   f32, so this path is selected for the *quantisation* it enables
+    #   (zero per-row cast in SQL, GPU-side u32→f32 unpack instead of
+    #   a JS-side Float32Array allocation), not for wire savings. u32
+    #   precision at the eubucco 40°-lon span is ~1.5 cm per step —
+    #   sub-pixel at any zoom, including the street-level views where
+    #   the prior u16 path produced a visible quantization grid.
+    #
+    #   The 322 M eubucco file has no category column, so the wire is
+    #   2.6 GB. Modern V8/Chrome handle this above the historic 2 GB
+    #   ceiling on 64-bit hosts; if a future dataset trips it we'll
+    #   either split into per-axis queries or enable Arrow IPC zstd
+    #   compression server-side (the sort key is __x_u32__,__y_u32__,
+    #   so adjacent rows have tiny deltas — zstd squashes the wire to
+    #   ~10 % of raw u32).
     #
     # In BOTH cases we advertise ``viewportHint`` so ``queryApproximateDensity``
     # skips its 5 s ``APPROX_QUANTILE + STDDEV`` round trip on cold load.
@@ -461,14 +469,20 @@ def _run_fast_path(
                 fast_connection.quantised_x_column is not None
                 and fast_connection.quantised_y_column is not None
             ):
-                y_u16_col = (
+                y_packed_col = (
                     fast_connection.quantised_merc_y_column
                     if use_merc_y
                     else fast_connection.quantised_y_column
                 )
+                # API field names ``x_u16``/``y_u16`` are kept as opaque
+                # identifiers — they originated when the wire was u16 and
+                # are now u32 column references. The viewer treats them
+                # as "the precomputed packed column"; the bit width is
+                # implied by the typed-array class that arrives over the
+                # wire (Uint32Array post-migration).
                 props["data"]["projection"]["precomputed"] = {
                     "x_u16": fast_connection.quantised_x_column,
-                    "y_u16": y_u16_col,
+                    "y_u16": y_packed_col,
                     "y_is_mercator": use_merc_y,
                 }
             # Tell the browser to skip the deferred density refinement
@@ -507,7 +521,7 @@ def _run_fast_path(
     # Mirror the wire-packing path the browser actually uses so the
     # cache key is byte-identical and the prewarm hits.
     if is_very_large and "precomputed" in props.get("data", {}).get("projection", {}):
-        # Path A — precomputed u16 columns, no per-row arithmetic.
+        # Path A — precomputed u32 columns, no per-row arithmetic.
         precomputed = props["data"]["projection"]["precomputed"]
         prewarm_sql = (
             f'SELECT "{precomputed["x_u16"]}" AS "x", '
@@ -515,16 +529,17 @@ def _run_fast_path(
             f'FROM "{fast_connection.table}"'
         )
     elif is_very_large and "bounds" in props.get("data", {}).get("projection", {}):
-        # Path B — on-the-fly USMALLINT cast (fallback when precomputed
+        # Path B — on-the-fly UINTEGER cast (fallback when precomputed
         # cols weren't generated).
         x_min, x_max = fast_connection.x_bounds
         y_min, y_max = fast_connection.y_bounds
-        x_scale = 65535 / (x_max - x_min)
-        y_scale = 65535 / (y_max - y_min)
+        U32_MAX = 4_294_967_295
+        x_scale = U32_MAX / (x_max - x_min)
+        y_scale = U32_MAX / (y_max - y_min)
         prewarm_sql = (
             f'SELECT '
-            f'((COALESCE("{x_col}", {x_min}) - {x_min}) * {x_scale})::USMALLINT AS "x", '
-            f'((COALESCE("{y_col}", {y_min}) - {y_min}) * {y_scale})::USMALLINT AS "y" '
+            f'((COALESCE("{x_col}", {x_min}) - {x_min}) * {x_scale})::UINTEGER AS "x", '
+            f'((COALESCE("{y_col}", {y_min}) - {y_min}) * {y_scale})::UINTEGER AS "y" '
             f'FROM "{fast_connection.table}"'
         )
     elif is_gis:

@@ -5,9 +5,9 @@
       x: Float32Array<ArrayBuffer>;
       y: Float32Array<ArrayBuffer>;
       /** When set, ``x``/``y`` are ignored and the renderer unpacks
-       *  these via a one-shot u16 → f32 GPU compute pass. */
-      xPacked?: Uint16Array<ArrayBuffer> | null;
-      yPacked?: Uint16Array<ArrayBuffer> | null;
+       *  these via a one-shot u32 → f32 GPU compute pass. */
+      xPacked?: Uint32Array<ArrayBuffer> | null;
+      yPacked?: Uint32Array<ArrayBuffer> | null;
       coordsBoundsX?: [number, number] | null;
       coordsBoundsY?: [number, number] | null;
       category: Uint8Array<ArrayBuffer> | null;
@@ -517,7 +517,7 @@
       // Packed pass-through. When set, the renderer ignores ``x``/``y``
       // and unpacks via the GPU compute pass — see ``unpack.wgsl``.
       // ``yIsAlreadyMercator`` is enforced upstream in
-      // ``EmbeddingViewMosaic`` (always true for the precomputed-u16
+      // ``EmbeddingViewMosaic`` (always true for the precomputed-u32
       // path), so the renderer never needs to re-project these.
       xPacked: data.xPacked ?? null,
       yPacked: data.yPacked ?? null,
@@ -581,7 +581,7 @@
     }
   });
 
-  function render() {
+  async function render() {
     _request = null;
     if (!canvas || !renderer) {
       return;
@@ -592,6 +592,32 @@
     if (_renderInFlight) {
       _renderPending = true;
       return;
+    }
+    // Wait for any in-flight u32 → f32 unpack chain to land before
+    // submitting the draw. The chain is sequenced (X drain + destroy,
+    // then Y) to keep peak GPU residency bounded — without this await
+    // the post-data-load frame would race the unpack and read either
+    // a half-populated f32 destination (Y still empty zeros → all
+    // points collapse to the y-min line) or freshly allocated zero
+    // memory (whole scatter at the bbox corner). The promise is a
+    // no-op for the WebGL fallback and for steady-state pan/zoom where
+    // no new packed buffers have arrived since the last render.
+    const unpackPromise = renderer.unpackInFlight;
+    if (unpackPromise) {
+      const renderToken = _renderToken;
+      try {
+        await unpackPromise;
+      } catch {
+        // Chain failures are surfaced inside the renderer; fall through
+        // to render whatever the f32 destinations currently hold.
+      }
+      // Renderer may have been recreated mid-await (device.lost path).
+      // The token bumps in the ``$effect(() => { ... })`` above; if it
+      // moved, drop this frame — a fresh render() will fire on the new
+      // renderer.
+      if (renderToken !== _renderToken || !renderer || !canvas) {
+        return;
+      }
     }
     // Only assign width/height when they actually change. Per HTML spec,
     // even same-value assignment resets the canvas bitmap, which on WebGPU
@@ -607,7 +633,7 @@
     const dev = (renderer as any).gpuDevice as GPUDevice | undefined;
     const t0 = performance.now();
     // Count must reflect whichever fill path is active. On the packed
-    // (u16-direct) path ``props.x`` is the empty sentinel and the real
+    // (u32-direct) path ``props.x`` is the empty sentinel and the real
     // length lives on ``props.xPacked`` — without this, the
     // first-frame flag and the perf log were silently disabled at
     // 322 M scale.
