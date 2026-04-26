@@ -59,6 +59,7 @@
     "vite-plugin-wasm": "^3.6.0"
   },
   "dependencies": {
+    "fzstd": "^0.1.1",
     "pmtiles": "^4.4.0",
     "vitefu": "^1.1.2"
   }

@@ -63,6 +63,21 @@ def load_huggingface_data(filename: str, splits: list[str] | None) -> pd.DataFra
     return df
 
 
+# IPC compression. zstd squashes a sorted u32 lon/lat scatter to ~10 % of
+# raw bytes — at the eubucco 322 M-row file the wire goes 2.58 GB → ~250
+# MB, which is what unblocks the post-u32 browser fetch (Chrome's
+# ``Response.arrayBuffer()`` aborts past ~2 GB; the auto-memory note
+# documents the silent-fail behaviour we hit before this fix). The
+# compression cost is single-threaded zstd on the server's main writer
+# thread — measured 350-450 MB/s on the M-series box, so ~3 s for 1.3 GB
+# of u32. The decompress side runs in JS via ``fzstd``.
+#
+# We hard-wire zstd here because the client-side codec is unconditionally
+# registered in ``EmbeddingViewMosaic.svelte``; once both ends understand
+# the format there's no value in the f32-passthrough fallback.
+_IPC_WRITE_OPTIONS = pa.ipc.IpcWriteOptions(compression="zstd")
+
+
 def arrow_to_bytes(arrow: pa.Table | pa.RecordBatchReader):
     # When DuckDB hands back a RecordBatchReader (1.4+), draining it
     # batch-by-batch in Python is dramatically slower than letting Arrow
@@ -85,7 +100,7 @@ def arrow_to_bytes(arrow: pa.Table | pa.RecordBatchReader):
     if isinstance(arrow, pa.Table) and arrow.num_rows > 0:
         arrow = arrow.combine_chunks()
     sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, arrow.schema) as writer:
+    with pa.ipc.new_stream(sink, arrow.schema, options=_IPC_WRITE_OPTIONS) as writer:
         writer.write(arrow)
     return sink.getvalue().to_pybytes()
 
@@ -102,7 +117,7 @@ def stream_arrow_ipc(reader: pa.RecordBatchReader, *, batch_chunk_bytes: int = 4
     record-batch's worth of bytes (~50 MB for 1 M-row batches).
     """
     sink = BytesIO()
-    writer = pa.ipc.new_stream(sink, reader.schema)
+    writer = pa.ipc.new_stream(sink, reader.schema, options=_IPC_WRITE_OPTIONS)
     try:
         for batch in reader:
             writer.write_batch(batch)

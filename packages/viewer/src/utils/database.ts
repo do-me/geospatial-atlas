@@ -1,11 +1,22 @@
 // Copyright (c) 2025 Apple Inc. Licensed under MIT License.
 
-import { Coordinator, restConnector, socketConnector, wasmConnector, type Selection } from "@uwdata/mosaic-core";
+import { streamingRestConnector } from "@embedding-atlas/component";
+import { Coordinator, socketConnector, wasmConnector, type Selection } from "@uwdata/mosaic-core";
 import * as SQL from "@uwdata/mosaic-sql";
 
 import { createDuckDB } from "./duckdb.js";
 
-/** Initialize the database connector for a Mosaic coordinator */
+/** Initialize the database connector for a Mosaic coordinator.
+ *
+ *  The "rest" path uses ``streamingRestConnector`` from
+ *  ``@embedding-atlas/component`` instead of Mosaic's stock
+ *  ``restConnector``. The stock version calls ``Response.arrayBuffer()``
+ *  on the arrow response, which Chrome aborts past ~2 GB — at the
+ *  322 M-row eubucco file the (zstd-compressed u32) scatter response
+ *  is ~2.1 GB and was getting us a "Failed to fetch" with no points
+ *  on the canvas. The streaming variant reads via ``response.body``
+ *  into a manually-allocated ``Uint8Array``, which goes through V8's
+ *  larger ~4 GB ArrayBuffer cap. */
 export async function initializeDatabase(
   coordinator: Coordinator,
   type: "wasm" | "socket" | "rest",
@@ -19,7 +30,7 @@ export async function initializeDatabase(
     const conn = await socketConnector({ uri: uri ?? "" });
     coordinator.databaseConnector(conn);
   } else if (type == "rest") {
-    const conn = await restConnector({ uri: uri ?? "" });
+    const conn = streamingRestConnector({ uri: uri ?? "" });
     coordinator.databaseConnector(conn);
   }
 }

@@ -5,6 +5,15 @@
   import * as SQL from "@uwdata/mosaic-sql";
   import { untrack } from "svelte";
 
+  // Side-effect import: registers a zstd codec with flechette so the
+  // Mosaic IPC decoder can inflate the compressed Arrow buffers the
+  // backend now emits. Imported here (not just from lib/index.ts) to
+  // cover viewer consumers that pull this component via the
+  // ``@embedding-atlas/component/svelte`` subpath, which bypasses the
+  // package's main entry and would otherwise hit a missing-codec
+  // error on the first scatter query. See ipc_codec.ts for context.
+  import "../ipc_codec.js";
+
   import EmbeddingViewImpl from "./EmbeddingViewImpl.svelte";
 
   import { deepEquals, type Point, type Rectangle, type ViewportState } from "../utils.js";
