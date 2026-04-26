@@ -1,13 +1,33 @@
 // Copyright (c) 2025 Apple Inc. Licensed under MIT License.
 //
-// Wire the u16 → f32 unpack compute pass into the renderer dataflow so
-// the JS side never has to allocate ``new Float32Array(N)`` for the
-// scatter coordinates. At 322 M rows that single allocation is 1.288 GB
-// per axis = 2.576 GB peak heap, which on a stock 4 GB Chrome tab is the
-// difference between "renders cleanly" and "blank canvas after pan".
+// One-shot u16 → f32 unpack for the scatter coordinate buffers.
+//
+// At 322 M rows the JS-side ``new Float32Array(N)`` for x and y was 2.576 GB
+// of heap pressure and the single biggest reason a stock 4 GB Chrome tab
+// went blank after pan. Sending u16 over the wire and unpacking on the
+// GPU gets the JS heap back to ~1.3 GB peak.
+//
+// Lifetime model: the u16 source buffer + the 16-byte uniform buffer are
+// **ephemeral** — created via ``mappedAtCreation: true``, written, dispatched,
+// then defer-destroyed once the queue drains. They are never persisted
+// across data loads.
+//
+// Why ephemeral: a previous version held the u16 source as a persistent
+// dataflow node. At 322 M that's an extra ~644 MB per axis sitting in the
+// GPU process on top of the persistent 1.288 GB f32 destinations — peak
+// GPU-process residency hit ~5 GB and crashed the GPU process on cold load
+// (every subsequent ``buffer.destroy()`` then threw "valid external
+// Instance reference no longer exists"). Allocating fresh per dispatch
+// keeps the steady-state GPU footprint at the f32 destinations only.
+//
+// Why ``mappedAtCreation: true`` instead of ``device.queue.writeBuffer``:
+// ``writeBuffer`` allocates a same-size staging buffer inside the GPU
+// process and copies through it. A 644 MB write means a 644 MB staging
+// allocation in addition to the destination — same OOM trap. ``mappedAtCreation``
+// hands us a renderer-process-mapped range, we ``set()`` into it, then
+// ``unmap()`` transfers ownership to the GPU process — no double allocation.
 
 import type { Dataflow, Node } from "../dataflow.js";
-import { gpuBuffer } from "./utils.js";
 
 import unpackShaderCode from "./unpack.wgsl?raw";
 
@@ -62,62 +82,56 @@ export function makeUnpackPipeline(df: Dataflow, device: Node<GPUDevice>): Unpac
   return { pipeline, bindGroupLayout };
 }
 
-/** Per-axis unpack resources. The u16 source buffer is sized to fit
- *  ``ceil(count/2) * 4`` bytes (each u32 holds two adjacent u16). The
- *  uniform buffer is 16 bytes (count u32, min f32, scale f32, padding). */
-export interface UnpackAxisResources {
-  u16Buffer: Node<GPUBuffer>;
-  uniformBuffer: Node<GPUBuffer>;
-}
-
-export function makeUnpackAxisResources(
-  df: Dataflow,
-  device: Node<GPUDevice>,
-  count: Node<number>,
-): UnpackAxisResources {
-  // u32-aligned: 4 bytes per pair of u16 (or one for odd N + 2 bytes pad).
-  const u16Bytes = df.derive([count], (c) => Math.max(4, Math.ceil(c / 2) * 4));
-  const u16Usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
-  const u16Buffer = df.statefulDerive([device, u16Bytes, u16Usage], gpuBuffer);
-  const uniformBuffer = df.statefulDerive(
-    [device, df.value(16), GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST],
-    gpuBuffer,
-  );
-  return { u16Buffer, uniformBuffer };
-}
-
 /** Encode + submit a one-shot compute pass that fills ``f32Dest`` from
- *  ``axis.u16Buffer`` using the linear inverse-map advertised in
- *  ``bounds``. Caller must ensure the u16 buffer was just written via
- *  ``device.queue.writeBuffer`` before invoking this — we issue our own
- *  ``submit`` so the unpack must follow the write in queue order. */
+ *  ``xPacked`` using the linear inverse-map advertised in ``bounds``.
+ *
+ *  Allocates the u16 source + uniform buffers fresh each call (via
+ *  ``mappedAtCreation: true`` so no GPU-process staging copy) and
+ *  defer-destroys them once the queue drains. See the file header
+ *  for the GPU-memory rationale. */
 export function runUnpack(
   device: GPUDevice,
   pipeline: GPUComputePipeline,
   bindGroupLayout: GPUBindGroupLayout,
-  axis: { u16Buffer: GPUBuffer; uniformBuffer: GPUBuffer },
+  xPacked: Uint16Array,
   f32Dest: GPUBuffer,
-  count: number,
   bounds: CoordsBounds1D,
 ): void {
-  // Write uniforms (count, min, scale, padding).
-  const scratch = new ArrayBuffer(16);
-  const view = new DataView(scratch);
-  view.setUint32(0, count, /* littleEndian */ true);
-  view.setFloat32(4, bounds.min, true);
+  const count = xPacked.length;
+  // u32-aligned: 4 bytes per pair of u16, plus a 2-byte tail when count
+  // is odd. The shader bails past ``params.count`` so the trailing
+  // zero-padded slot is never read.
+  const u16Bytes = Math.max(4, Math.ceil(count / 2) * 4);
+  const u16Buffer = device.createBuffer({
+    size: u16Bytes,
+    usage: GPUBufferUsage.STORAGE,
+    mappedAtCreation: true,
+  });
+  new Uint16Array(u16Buffer.getMappedRange()).set(xPacked);
+  u16Buffer.unmap();
+
+  // Uniforms: count u32, min f32, scale f32, padding u32 (16 bytes).
+  const uniformBuffer = device.createBuffer({
+    size: 16,
+    usage: GPUBufferUsage.UNIFORM,
+    mappedAtCreation: true,
+  });
+  const uniformView = new DataView(uniformBuffer.getMappedRange());
+  uniformView.setUint32(0, count, /* littleEndian */ true);
+  uniformView.setFloat32(4, bounds.min, true);
   // scale = (max - min) / 65535. Encoded once on the host so the shader
   // is a single FMA per invocation.
   const scale = (bounds.max - bounds.min) / 65535;
-  view.setFloat32(8, scale, true);
-  view.setUint32(12, 0, true);
-  device.queue.writeBuffer(axis.uniformBuffer, 0, scratch);
+  uniformView.setFloat32(8, scale, true);
+  uniformView.setUint32(12, 0, true);
+  uniformBuffer.unmap();
 
   const bindGroup = device.createBindGroup({
     layout: bindGroupLayout,
     entries: [
-      { binding: 0, resource: { buffer: axis.u16Buffer } },
+      { binding: 0, resource: { buffer: u16Buffer } },
       { binding: 1, resource: { buffer: f32Dest } },
-      { binding: 2, resource: { buffer: axis.uniformBuffer } },
+      { binding: 2, resource: { buffer: uniformBuffer } },
     ],
   });
 
@@ -133,4 +147,14 @@ export function runUnpack(
   pass.dispatchWorkgroups(workgroupsX, workgroupsY);
   pass.end();
   device.queue.submit([encoder.finish()]);
+
+  // Defer-destroy: the in-flight dispatch still references both buffers
+  // until the submit completes. ``onSubmittedWorkDone`` resolves once
+  // every prior submit has executed — destroying earlier triggers the
+  // ``MTLDevice``-poisoning fault that ``utils.ts:gpuBuffer`` already
+  // works around for the persistent f32 destinations.
+  device.queue.onSubmittedWorkDone().then(() => {
+    u16Buffer.destroy();
+    uniformBuffer.destroy();
+  });
 }

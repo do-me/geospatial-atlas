@@ -324,6 +324,37 @@ def make_server(
             if arrow_cache is not None:
                 arrow_cache.invalidate()
 
+    # Eager promote: as soon as the bg materialise finishes, swap the
+    # view for the table. Without this, the view stays in place until
+    # the first write query (e.g. color-by ALTER) — which means
+    # tooltip / scatter reads keep going through ``read_parquet(...)``
+    # even after the spatially-sorted bg-mat table is ready. At 322 M
+    # the unsorted-view tooltip path is ~10 s; the sorted-table path
+    # is ~50 ms (DuckDB row-group min/max pruning on x/y).
+    if (
+        _dataset_state["is_view"]
+        and materialise_thread is not None
+        and materialise_table is not None
+    ):
+        def _eager_swap_when_ready() -> None:
+            try:
+                materialise_thread.join()
+            except BaseException:
+                return
+            try:
+                _ensure_dataset_materialised()
+                if debug_sql:
+                    print("[bg-mat eager-swap] view → table promotion done", flush=True)
+            except BaseException as e:
+                if debug_sql:
+                    print(f"[bg-mat eager-swap] error: {e}", flush=True)
+
+        threading.Thread(
+            target=_eager_swap_when_ready,
+            name="bg-mat-eager-swap",
+            daemon=True,
+        ).start()
+
     def handle_query(query: dict):
         assert duckdb_connection is not None
         sql = query["sql"]

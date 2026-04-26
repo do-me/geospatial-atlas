@@ -24,7 +24,7 @@ import { makeDrawPointsCommand, makeDrawPointsCompactedCommand, makeDrawPointsDo
 import { makeGammaCorrectionCommand } from "./gamma_correction.js";
 import { makeGaussianBlurCommand } from "./gaussian_blur.js";
 import { kdeConfig } from "./kde_config.js";
-import { makeUnpackAxisResources, makeUnpackPipeline, runUnpack, type UnpackAxisResources, type UnpackPipeline } from "./unpack.js";
+import { makeUnpackPipeline, runUnpack, type UnpackPipeline } from "./unpack.js";
 
 import programCode from "./program.wgsl?raw";
 
@@ -87,13 +87,12 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
   private renderInputs: RenderInputs;
   private dataBuffers: DataBuffers;
   private renderer: Node<(props: EmbeddingRendererProps, textureView: GPUTextureView) => void>;
-  /** GPU-side u16 unpack pipeline + per-axis source/uniform buffers, used
-   *  whenever ``setProps`` receives ``xPacked``/``yPacked``. The downstream
+  /** GPU-side u16 unpack pipeline (compute pipeline + bind-group layout
+   *  only — the per-dispatch u16 source + uniform buffers are allocated
+   *  ephemerally inside ``runUnpack`` and defer-destroyed). The downstream
    *  ``dataBuffers.x``/``y`` f32 storage buffers are filled by this
    *  pipeline rather than by a JS-side ``Float32Array(N)`` allocation. */
   private unpack: UnpackPipeline;
-  private xUnpackResources: UnpackAxisResources;
-  private yUnpackResources: UnpackAxisResources;
   /** Last (xPacked, yPacked) values fed through the unpack pipeline. We
    *  re-run the unpack only when the buffer reference *or* the bounds
    *  change — Mosaic occasionally re-emits the same arrow batch on a
@@ -182,13 +181,13 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
     };
     this.device = df.value(device);
     this.dataBuffers = makeDataBuffers(df, this.device, this.renderInputs);
-    // Unpack resources live in the same dataflow so they share the
-    // device's lifetime. The pipeline itself is cheap to compile (one
-    // ~30-line WGSL kernel); per-axis u16 source buffers are sized to
-    // ``count`` and grow with the dataset.
+    // The pipeline itself is cheap to compile (one ~30-line WGSL kernel)
+    // and lives for the device's lifetime. The u16 source + uniform
+    // buffers a dispatch needs are allocated fresh per call inside
+    // ``runUnpack`` — keeping ~644 MB of persistent u16 GPU memory off
+    // the books at 322 M points (which previously crashed the GPU
+    // process on cold load against a stock 4 GB tab budget).
     this.unpack = makeUnpackPipeline(df, this.device);
-    this.xUnpackResources = makeUnpackAxisResources(df, this.device, this.renderInputs.count);
-    this.yUnpackResources = makeUnpackAxisResources(df, this.device, this.renderInputs.count);
     const moduleCode = this.useF16 ? programCode : f32ProgramOf(programCode);
     this.module = df.derive([this.device], (device) => device.createShaderModule({ code: moduleCode }));
     this.uniforms = makeModuleUniforms(df, this.device);
@@ -291,17 +290,24 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
     if (sameX && sameY) {
       return;
     }
-    const xDest = this.dataBuffers.x.value;
-    const yDest = this.dataBuffers.y.value;
-    const xU16 = this.xUnpackResources.u16Buffer.value;
-    const yU16 = this.yUnpackResources.u16Buffer.value;
-    const xUni = this.xUnpackResources.uniformBuffer.value;
-    const yUni = this.yUnpackResources.uniformBuffer.value;
+    // A single storage-buffer binding > device limit silently drops
+    // its dispatch on Dawn (the validation error fires on
+    // ``uncapturederror`` and the bind group is left as a hole). A
+    // clear console.error beats a blank canvas. The f32 destinations
+    // are the largest binding in the unpack bind group.
+    const f32BindBytes = count * 4;
+    const limit = this.gpuDevice.limits.maxStorageBufferBindingSize;
+    if (f32BindBytes > limit) {
+      console.error(
+        `[atlas-gpu] f32 storage binding ${f32BindBytes} bytes exceeds maxStorageBufferBindingSize ${limit} — unpack skipped (count=${count}). Consider splitting the dataset.`,
+      );
+      return;
+    }
     const pipeline = this.unpack.pipeline.value;
     const layout = this.unpack.bindGroupLayout.value;
     if (!sameX) {
-      this.gpuDevice.queue.writeBuffer(xU16, 0, xPacked.buffer, xPacked.byteOffset, xPacked.byteLength);
-      runUnpack(this.gpuDevice, pipeline, layout, { u16Buffer: xU16, uniformBuffer: xUni }, xDest, count, {
+      const xDest = this.dataBuffers.x.value;
+      runUnpack(this.gpuDevice, pipeline, layout, xPacked, xDest, {
         min: boundsX[0],
         max: boundsX[1],
       });
@@ -309,8 +315,8 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
       this.lastCoordsBoundsX = [boundsX[0], boundsX[1]];
     }
     if (!sameY) {
-      this.gpuDevice.queue.writeBuffer(yU16, 0, yPacked.buffer, yPacked.byteOffset, yPacked.byteLength);
-      runUnpack(this.gpuDevice, pipeline, layout, { u16Buffer: yU16, uniformBuffer: yUni }, yDest, count, {
+      const yDest = this.dataBuffers.y.value;
+      runUnpack(this.gpuDevice, pipeline, layout, yPacked, yDest, {
         min: boundsY[0],
         max: boundsY[1],
       });

@@ -571,6 +571,13 @@
     if (!canvas || !renderer) {
       return;
     }
+    // Backpressure gate — see ``_renderInFlight`` declaration above for
+    // why this exists. Rapid pan-releases at 322 M would otherwise queue
+    // multi-second GPU pipelines back-to-back and freeze the tab.
+    if (_renderInFlight) {
+      _renderPending = true;
+      return;
+    }
     // Only assign width/height when they actually change. Per HTML spec,
     // even same-value assignment resets the canvas bitmap, which on WebGPU
     // invalidates the swap chain and causes a 1-frame blank at the moment
@@ -599,6 +606,20 @@
       }
     }
     renderer.render();
+    // Backpressure: this render's submit is now in flight. Block
+    // subsequent renders until the GPU drains. WebGL fallback has no
+    // ``onSubmittedWorkDone`` — it pipelines implicitly through its own
+    // swap chain, so we leave ``_renderInFlight`` false.
+    if (dev) {
+      _renderInFlight = true;
+      dev.queue.onSubmittedWorkDone().then(() => {
+        _renderInFlight = false;
+        if (_renderPending) {
+          _renderPending = false;
+          setNeedsRender();
+        }
+      });
+    }
     // Always-on "first GPU frame on screen" signal. The viewer's
     // ``EmbeddingAtlas`` column-chart discovery polls
     // ``__atlasFirstBigRenderGpuLogged`` to decide when to mount the side
@@ -663,6 +684,23 @@
   }
 
   let _request: number | null = null;
+  // GPU backpressure. ``renderer.render()`` is fire-and-forget — the
+  // submit returns instantly, the GPU drains async. At 322 M points a
+  // single full pipeline (accumulate → blur → downsample → draw) takes
+  // ~3 s on Apple GPU. Without backpressure, two pan-releases inside
+  // 3 s queue ~6 s of GPU work; the macOS Metal command-buffer
+  // watchdog can kill long submits and the compositor (same GPU
+  // process) starves — Chrome's window goes unresponsive.
+  //
+  // We coalesce: while ``_renderInFlight`` is true, additional
+  // setNeedsRender / requestAnimationFrame fires only flag
+  // ``_renderPending``. When the in-flight pipeline drains via
+  // ``device.queue.onSubmittedWorkDone()``, we run **one** catch-up
+  // render against the latest viewport state. Net: at most one render
+  // queued at a time; rapid pan-releases collapse into a single
+  // post-drain frame.
+  let _renderInFlight = false;
+  let _renderPending = false;
   function setNeedsRender() {
     if (_request == null) {
       _request = requestAnimationFrame(render);
