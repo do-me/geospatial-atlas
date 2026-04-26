@@ -37,6 +37,23 @@ export interface EmbeddingAtlasProps {
        *  query streams coordinates as u16 (roughly half the bytes vs f32).
        *  The server CLI fills this in for GIS fast-path loads. */
       bounds?: { x: [number, number]; y: [number, number] } | null;
+      /** Pre-computed centroid + extents for the initial viewport. The
+       *  embedding view uses this to skip its cold-load
+       *  ``APPROX_QUANTILE+STDDEV`` round trip — saves ~5 s on 75 M-row
+       *  GIS datasets. Unlike `bounds` this never affects wire packing. */
+      viewportHint?: {
+        centerX: number;
+        centerY: number;
+        rangeX: number;
+        rangeY: number;
+        rowCount?: number;
+        /** When true, the embedding view does NOT fire the post-mount
+         *  ``APPROX_QUANTILE+STDDEV+TABLESAMPLE`` density refinement.
+         *  Set by the loader for very-large (> 200 M-row) datasets where
+         *  the refinement is a 100 s+ DB hit for sub-percent improvement
+         *  in the colour-ramp's ``maxDensity`` parameter. */
+        skipDeferredRefine?: boolean;
+      } | null;
     } | null;
 
     /** The column for pre-computed nearest neighbors.

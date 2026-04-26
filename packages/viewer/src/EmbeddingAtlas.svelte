@@ -36,7 +36,7 @@
   import type { EmbeddingAtlasProps, EmbeddingAtlasState } from "./api.js";
   import { ChartContextCache, type ChartContext, type ChartDelegate, type RowID } from "./charts/chart.js";
   import { type ChartThemeConfig } from "./charts/common/theme.js";
-  import { defaultCharts } from "./charts/default_charts.js";
+  import { defaultCharts, defaultPrimaryCharts, defaultColumnCharts } from "./charts/default_charts.js";
   import { EMBEDDING_ATLAS_VERSION } from "./constants.js";
   import { provideModelContext } from "./model_context/model_context.js";
   import { type ColumnStyle } from "./renderers/types.js";
@@ -277,22 +277,74 @@
       loadState(initialState);
     }
     if (Object.keys(charts).length == 0) {
-      let newCharts = await defaultCharts({
-        coordinator,
-        table: data.table,
-        id: data.id,
-        projection: data.projection
-          ? {
-              ...data.projection,
-              text: data.text ?? undefined,
-              isGis: data.projection.isGis ?? undefined,
-              image: data.image ?? undefined,
-              importance: data.importance ?? undefined,
-            }
-          : undefined,
+      // Two-phase chart discovery: mount the embedding/predicates/instances
+      // charts immediately (no DB queries needed), then in the background
+      // query distinct counts to add column histograms/count-plots. The
+      // wide ``APPROX_COUNT_DISTINCT`` batch can take 5–10 s on 75 M+ row
+      // datasets, and serialising it ahead of the embedding mount delayed
+      // the scatter query (and thus first-paint) by exactly that amount.
+      const projection = data.projection
+        ? {
+            ...data.projection,
+            text: data.text ?? undefined,
+            isGis: data.projection.isGis ?? undefined,
+            image: data.image ?? undefined,
+            importance: data.importance ?? undefined,
+          }
+        : undefined;
+      const primary = defaultPrimaryCharts({
+        projection,
         config: defaultChartsConfig ?? undefined,
       });
-      charts = Object.fromEntries(newCharts.map((spec, i) => [`${i + 1}`, spec]));
+      charts = Object.fromEntries(primary.map((spec, i) => [`${i + 1}`, spec]));
+      initialized = true;
+      // Defer column-chart discovery until the embedding scatter has actually
+      // reached its first frame. Mounting a dozen chart components straight
+      // away — each with its own Mosaic queries and Svelte effects — saturates
+      // the main thread and pushes ``renderer.render()`` for the 75 M-point
+      // scatter buffer behind several seconds of layout/query work. Waiting
+      // ~250 ms after first-paint gives the renderer a clean stretch to do
+      // the GPU upload, then the side-panel charts populate quietly.
+      const scheduleColumnDiscovery = () => {
+        defaultColumnCharts({
+          coordinator,
+          table: data.table,
+          columns,
+          projection,
+          config: defaultChartsConfig ?? undefined,
+        })
+          .then((extra) => {
+            if (extra.length === 0) return;
+            const next = { ...charts };
+            let nextId = primary.length + 1;
+            for (const spec of extra) {
+              next[`${nextId++}`] = spec;
+            }
+            charts = next;
+          })
+          .catch((err) => {
+            console.warn("[atlas] column-chart discovery failed:", err);
+          });
+      };
+      // Wait for the scatter render to land. Polled because we don't have a
+      // direct hook from inside the component package — and we also keep a
+      // 4 s safety net so the side panel still appears for tiny datasets
+      // where the perf signal never arrives.
+      const w: any = window as any;
+      if (w.__atlasDisableColumnDiscovery) {
+        // Diagnostic mode: skip column-chart discovery entirely.
+        return;
+      }
+      const start = performance.now();
+      const poll = () => {
+        if (w.__atlasFirstBigRenderGpuLogged || performance.now() - start > 60000) {
+          scheduleColumnDiscovery();
+          return;
+        }
+        setTimeout(poll, 100);
+      };
+      setTimeout(poll, 100);
+      return;
     }
 
     initialized = true;

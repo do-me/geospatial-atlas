@@ -9,7 +9,7 @@
   import Switch from "../../widgets/Switch.svelte";
 
   import { EMBEDDING_ATLAS_VERSION } from "../../constants.js";
-  import { jsTypeFromDBType } from "../../utils/database.js";
+  import { formatColumnType, jsTypeFromDBType } from "../../utils/database.js";
   import { detectGisColumns, type GisDetectionResult } from "../../utils/gis_detection.js";
 
   // Predefined embedding models. The default is the first model.
@@ -140,7 +140,7 @@
         onChange={(v) => (textColumn = v)}
         options={[
           { value: undefined, label: "(none)" },
-          ...stringColumns.map((x) => ({ value: x.column_name, label: `${x.column_name} (${x.column_type})` })),
+          ...stringColumns.map((x) => ({ value: x.column_name, label: `${x.column_name} (${formatColumnType(x.column_type)})` })),
         ]}
       />
     </div>
@@ -185,7 +185,7 @@
           onChange={(v) => (embeddingXColumn = v)}
           options={[
             { value: undefined, label: "(none)" },
-            ...numericalColumns.map((x) => ({ value: x.column_name, label: `${x.column_name} (${x.column_type})` })),
+            ...numericalColumns.map((x) => ({ value: x.column_name, label: `${x.column_name} (${formatColumnType(x.column_type)})` })),
           ]}
         />
       </div>
@@ -197,7 +197,7 @@
           onChange={(v) => (embeddingYColumn = v)}
           options={[
             { value: undefined, label: "(none)" },
-            ...numericalColumns.map((x) => ({ value: x.column_name, label: `${x.column_name} (${x.column_type})` })),
+            ...numericalColumns.map((x) => ({ value: x.column_name, label: `${x.column_name} (${formatColumnType(x.column_type)})` })),
           ]}
         />
       </div>
@@ -216,7 +216,7 @@
           onChange={(v) => (embeddingNeighborsColumn = v)}
           options={[
             { value: undefined, label: "(none)" },
-            ...columns.map((x) => ({ value: x.column_name, label: `${x.column_name} (${x.column_type})` })),
+            ...columns.map((x) => ({ value: x.column_name, label: `${x.column_name} (${formatColumnType(x.column_type)})` })),
           ]}
         />
       </div>
@@ -234,7 +234,7 @@
           onChange={(v) => (embeddingTextColumn = v)}
           options={[
             { value: undefined, label: "(none)" },
-            ...stringColumns.map((x) => ({ value: x.column_name, label: `${x.column_name} (${x.column_type})` })),
+            ...stringColumns.map((x) => ({ value: x.column_name, label: `${x.column_name} (${formatColumnType(x.column_type)})` })),
           ]}
         />
       </div>
@@ -261,7 +261,7 @@
           onChange={(v) => (embeddingImageColumn = v)}
           options={[
             { value: undefined, label: "(none)" },
-            ...columns.map((x) => ({ value: x.column_name, label: `${x.column_name} (${x.column_type})` })),
+            ...columns.map((x) => ({ value: x.column_name, label: `${x.column_name} (${formatColumnType(x.column_type)})` })),
           ]}
         />
       </div>

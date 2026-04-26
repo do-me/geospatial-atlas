@@ -7,7 +7,7 @@
   import Overlay from "./Overlay.svelte";
   import Tooltip from "./Tooltip.svelte";
 
-  import { type EmbeddingLegend } from "../../utils/database.js";
+  import { formatColumnType, type EmbeddingLegend } from "../../utils/database.js";
   import { createCustomComponentClass } from "./custom_components.js";
 
   async function defaultViewportScale(coordinator: Coordinator, table: string, x: string, y: string): Promise<number> {
@@ -233,6 +233,8 @@
     x={spec.data.x}
     y={spec.data.y}
     bounds={spec.data.bounds}
+    precomputed={spec.data.precomputed}
+    viewportHint={spec.data.viewportHint}
     text={spec.data.text}
     image={spec.data.image}
     importance={spec.data.importance}
@@ -309,7 +311,7 @@
           { value: undefined, label: "--" },
           ...context.columns
             .filter((c) => c.jsType == "string" || c.jsType == "number" || c.jsType == "Date")
-            .map((c) => ({ value: c.name, label: `${c.name} (${c.type})` })),
+            .map((c) => ({ value: c.name, label: `${c.name} (${formatColumnType(c.type)})` })),
         ]}
       />
       <PopupButton icon={IconSettings} title="Options">

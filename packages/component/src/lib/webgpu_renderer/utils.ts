@@ -56,6 +56,7 @@ export async function requestWebGPUDevice(): Promise<WebGPUDeviceResult | null> 
     for (const sz of limitPresets) {
       try {
         const device = await adapter.requestDevice(buildDescriptor(sz, features));
+        installGpuErrorObservability(device, { useF16, sizePresetMiB: sz });
         return { device, useF16 };
       } catch (error) {
         console.error(error);
@@ -64,6 +65,53 @@ export async function requestWebGPUDevice(): Promise<WebGPUDeviceResult | null> 
     }
   }
   return null;
+}
+
+interface AtlasGpuErrorRecord {
+  t: number;
+  kind: "uncaptured" | "lost";
+  message: string;
+  reason?: string;
+}
+
+declare global {
+  interface Window {
+    __atlasGpuErrors?: AtlasGpuErrorRecord[];
+    __atlasGpuDeviceInfo?: { useF16: boolean; sizePresetMiB: number | null; t: number };
+  }
+}
+
+function installGpuErrorObservability(
+  device: GPUDevice,
+  meta: { useF16: boolean; sizePresetMiB: number | null },
+) {
+  if (typeof window === "undefined") return;
+  if (!Array.isArray(window.__atlasGpuErrors)) window.__atlasGpuErrors = [];
+  window.__atlasGpuDeviceInfo = { ...meta, t: performance.now() };
+  // ``uncapturederror`` is the per-validation/OOM event channel — without
+  // this listener every WebGPU error is silently swallowed and we only
+  // see the downstream Metal "ignored submissions" cascade in stderr,
+  // with no clue about the original triggering error.
+  device.addEventListener("uncapturederror", (ev) => {
+    const e = (ev as GPUUncapturedErrorEvent).error;
+    const rec: AtlasGpuErrorRecord = {
+      t: performance.now(),
+      kind: "uncaptured",
+      message: e?.message ?? String(e),
+    };
+    window.__atlasGpuErrors!.push(rec);
+    console.warn("[atlas-gpu] uncapturederror:", rec.message);
+  });
+  device.lost.then((info) => {
+    const rec: AtlasGpuErrorRecord = {
+      t: performance.now(),
+      kind: "lost",
+      message: info.message,
+      reason: info.reason,
+    };
+    window.__atlasGpuErrors!.push(rec);
+    console.warn("[atlas-gpu] device.lost:", rec.reason, rec.message);
+  });
 }
 
 function correctedBufferSize(size: number): number {
@@ -89,12 +137,25 @@ export function gpuBuffer(
 ): GPUBuffer {
   if (state.buffer == null || state.byteSize != byteSize || state.usage != usage) {
     if (state.buffer != null) {
-      state.buffer.destroy();
+      // Defer destroy until queued work that may still reference this
+      // buffer drains. Without this, reactive size changes (e.g. a
+      // post-mount density refinement updating ``categoryCount`` or
+      // ``maxDensity``) free the buffer while a queued command buffer
+      // is still holding a Metal page reference — that fault then
+      // poisons the entire MTLDevice and every subsequent submit
+      // (WebGPU, WebGL, compositor) reports
+      // ``kIOGPUCommandBufferCallbackErrorSubmissionsIgnored``.
+      const old = state.buffer;
+      device.queue.onSubmittedWorkDone().then(() => old.destroy());
     }
     state.buffer = device.createBuffer({ size: correctedBufferSize(byteSize), usage: usage });
     state.byteSize = byteSize;
+    state.usage = usage;
     state.destroy = () => {
-      state.buffer?.destroy();
+      const cur = state.buffer;
+      if (cur != null) {
+        device.queue.onSubmittedWorkDone().then(() => cur.destroy());
+      }
     };
   }
   return state.buffer;
@@ -159,11 +220,19 @@ export function gpuTexture(
     state.usage != usage
   ) {
     if (state.texture != null) {
-      state.texture.destroy();
+      const old = state.texture;
+      device.queue.onSubmittedWorkDone().then(() => old.destroy());
     }
     state.texture = device.createTexture({ size: [width, height], format: format, usage: usage });
+    state.width = width;
+    state.height = height;
+    state.format = format;
+    state.usage = usage;
     state.destroy = () => {
-      state.texture?.destroy();
+      const cur = state.texture;
+      if (cur != null) {
+        device.queue.onSubmittedWorkDone().then(() => cur.destroy());
+      }
     };
   }
   return state.texture;

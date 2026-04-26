@@ -30,6 +30,8 @@
     x,
     y,
     bounds = null,
+    precomputed = null,
+    viewportHint = null,
     category = null,
     text = null,
     image = null,
@@ -61,6 +63,10 @@
   let xData: Float32Array<ArrayBuffer> = $state.raw(new Float32Array());
   let yData: Float32Array<ArrayBuffer> = $state.raw(new Float32Array());
   let categoryData: Uint8Array<ArrayBuffer> | null = $state.raw(null);
+  // True when ``yData`` arrived already Mercator-projected from the server
+  // (GIS Path C only). Prevents the ``EmbeddingViewImpl`` JS projection
+  // loop from re-projecting and producing nonsense coords.
+  let yIsAlreadyMercator: boolean = $state.raw(false);
   let categoryCount: number = $state.raw(1);
   let totalCount: number = $state.raw(1);
   let maxDensity: number = $state.raw(1);
@@ -73,17 +79,79 @@
   let clientId: any | null = $state.raw(null);
 
   $effect(() => {
-    // Let Svelte track the dependencies. Include `bounds` so changing from
-    // null → set (or back) rebuilds the client with the right packed-SQL
-    // path.
-    let deps = { coordinator: coordinator, source: { table, x, y, category }, bounds };
+    // Let Svelte track the dependencies. Include `bounds` and `precomputed`
+    // so changing from null → set (or back) rebuilds the client with the
+    // right SQL path.
+    let deps = { coordinator: coordinator, source: { table, x, y, category }, bounds, precomputed, viewportHint };
 
     let client: { destroy: () => void } | null = null;
     let didDestroy = false;
 
     async function initClient() {
       let source = deps.source;
-      let approxDensity = await queryApproximateDensity(deps.coordinator, source);
+      // Fast path: when the data source advertises a ``viewportHint`` (the
+      // server already knows the bbox + row count from the parquet
+      // footer), we can synthesise a centerX / centerY / scaler /
+      // totalCount without any query at all. The remaining unknown is
+      // ``maxDensity``, which the density ramp uses for color saturation —
+      // we kick off the same TABLESAMPLE query but in parallel with the
+      // scatter mount, so the ramp converges shortly after first paint
+      // instead of blocking the embedding view's mount on a 5 s
+      // APPROX_QUANTILE+STDDEV round trip.
+      let approxDensity: Awaited<ReturnType<typeof queryApproximateDensity>>;
+      if (viewportHint != null) {
+        const range = Math.max(viewportHint.rangeX, viewportHint.rangeY, 1e-9);
+        const hintedScaler = 1.0 / (range * 0.5);
+        approxDensity = {
+          centerX: viewportHint.centerX,
+          centerY: viewportHint.centerY,
+          scaler: hintedScaler,
+          totalCount: viewportHint.rowCount ?? 0,
+          // ``categoryCount`` is overwritten below if a category column is
+          // bound; leave a benign default for the no-category case.
+          categoryCount: 1,
+          // Approximate the upper bound of points-per-bin so the density
+          // colour ramp has something sensible until the real value
+          // arrives. Worst case ~5 % of points in the densest bin.
+          maxDensity: viewportHint.rowCount
+            ? (viewportHint.rowCount * 0.05) / Math.max(0.01 / hintedScaler, 1e-12) ** 2
+            : 1,
+        };
+        // Refine ``maxDensity`` in the background AFTER the scatter query
+        // has had a clear runway. Firing immediately would compete with
+        // the scatter SQL on DuckDB's thread pool — on a 75 M-row file
+        // both queries scan the same ~600 MB of column data, so a
+        // sequential schedule is actually faster end-to-end. 2 s is long
+        // enough for the scatter to land first on cold loads.
+        // Skip the deferred refinement entirely when the loader signals
+        // it (very-large datasets — APPROX_QUANTILE on 322 M rows is
+        // 200 s of DB load for sub-percent accuracy gain in the colour
+        // ramp; the ``viewportHint`` heuristic is good enough at that
+        // density).
+        if (!viewportHint.skipDeferredRefine) {
+          setTimeout(() => {
+            if (didDestroy) return;
+            const t0 = performance.now();
+            queryApproximateDensity(deps.coordinator, source)
+              .then((real) => {
+                if (didDestroy) return;
+                const dt = performance.now() - t0;
+                console.info(
+                  `[atlas-stage] deferred-density-refine done in ${dt.toFixed(0)}ms`,
+                  { categoryCount: real.categoryCount, totalCount: real.totalCount, maxDensity: real.maxDensity },
+                );
+                totalCount = real.totalCount || totalCount;
+                maxDensity = real.maxDensity;
+                categoryCount = real.categoryCount;
+              })
+              .catch(() => {});
+          }, 2000);
+        } else {
+          console.info("[atlas-stage] deferred-density-refine SKIPPED (viewportHint.skipDeferredRefine)");
+        }
+      } else {
+        approxDensity = await queryApproximateDensity(deps.coordinator, source);
+      }
       if (didDestroy) {
         return;
       }
@@ -100,26 +168,65 @@
       // smaller for the 75 M-point scatter query. Quantization error at
       // the bbox scale is ≤ (range / 65535), well below one screen pixel
       // for global GIS views.
+      //
+      // Three SQL paths:
+      //   (A) precomputed + bounds  → SELECT __x_u16__, __y_u16__ — pure
+      //       scan, no per-row arithmetic. Loader baked the cast at CTAS.
+      //   (B) bounds only           → ((x - xMin) * xScale)::USMALLINT —
+      //       single FMA per row, no GREATEST/LEAST clamps. Bounds are
+      //       trusted (the loader computed them); near-bound floats may
+      //       round to 65536, but USMALLINT cast wraps to 0 — for our
+      //       use-case (sub-pixel quant noise in display coords) that
+      //       is invisible. We still defend against NULL via COALESCE.
+      //   (C) no bounds             → f32 passthrough, ~2× the wire bytes.
       const packed = bounds != null;
       const packedBounds = bounds;
+      const precomputedCols = precomputed;
+      // GIS detection: prefer the explicit ``config.isGis`` (set by
+      // ``Embedding.svelte``) but fall back to the ``viewportHint``
+      // signal — when the loader advertised one, the dataset is GIS by
+      // construction. ``server-side mercator`` is a major win only on
+      // the Path-C f32 wire (Path A/B coords are pre-quantised to the
+      // same linear bounds, no projection needed there).
+      const gisProjectInQuery = !packed && (config?.isGis === true || viewportHint != null);
+      // Path A's precomputed y column may already encode Mercator-projected
+      // values (loader pre-projected at view-definition time). When it
+      // does, advertise it through ``yIsAlreadyMercator`` so
+      // ``EmbeddingViewImpl`` skips its 5.9 s JS Mercator loop on 322 M
+      // rows.
+      const precomputedYIsMerc = packed && precomputedCols != null
+        && (precomputedCols as { y_is_mercator?: boolean }).y_is_mercator === true;
+      yIsAlreadyMercator = gisProjectInQuery || precomputedYIsMerc;
       client = makeClient({
         coordinator: deps.coordinator,
         selection: filter ?? undefined,
         query: (predicate) => {
           let xExpr: any;
           let yExpr: any;
-          if (packed && packedBounds != null) {
+          if (packed && packedBounds != null && precomputedCols != null) {
+            // Path (A) — fastest. ~6× the on-the-fly cast at 300 M.
+            xExpr = SQL.column(precomputedCols.x_u16);
+            yExpr = SQL.column(precomputedCols.y_u16);
+          } else if (packed && packedBounds != null) {
+            // Path (B) — drop clamps, fold to single FMA. ~2.4× the
+            // GREATEST/LEAST/ROUND form measured at 300 M.
             const [xMin, xMax] = packedBounds.x;
             const [yMin, yMax] = packedBounds.y;
-            const xRange = xMax - xMin;
-            const yRange = yMax - yMin;
-            // GREATEST/LEAST clamp so an out-of-bbox row (possible with
-            // filters that inject synthetic rows) never overflows u16.
-            xExpr = SQL.sql`GREATEST(0, LEAST(65535, ROUND((${SQL.column(source.x)} - ${xMin}) / ${xRange} * 65535)))::USMALLINT`;
-            yExpr = SQL.sql`GREATEST(0, LEAST(65535, ROUND((${SQL.column(source.y)} - ${yMin}) / ${yRange} * 65535)))::USMALLINT`;
+            const xScale = 65535 / (xMax - xMin);
+            const yScale = 65535 / (yMax - yMin);
+            xExpr = SQL.sql`((COALESCE(${SQL.column(source.x)}, ${xMin}) - ${xMin}) * ${xScale})::USMALLINT`;
+            yExpr = SQL.sql`((COALESCE(${SQL.column(source.y)}, ${yMin}) - ${yMin}) * ${yScale})::USMALLINT`;
           } else {
             xExpr = SQL.sql`${SQL.column(source.x)}::FLOAT`;
-            yExpr = SQL.sql`${SQL.column(source.y)}::FLOAT`;
+            // Server-side Mercator projection (GIS Path C only). Saves
+            // ~1.8 s on 75 M-row cold loads — DuckDB's vectorised
+            // tan/log is C-level fast, while the equivalent JS loop
+            // single-threads through ``Math.tan`` 75 M times.
+            // ``yIsAlreadyMercator`` tells ``EmbeddingViewImpl`` to
+            // skip its own projection so we don't double-project.
+            yExpr = gisProjectInQuery
+              ? SQL.sql`(LN(TAN(PI()/4 + ${SQL.column(source.y)} * PI() / 360))*180/PI())::FLOAT`
+              : SQL.sql`${SQL.column(source.y)}::FLOAT`;
           }
           return SQL.Query.from(source.table)
             .select({
@@ -130,9 +237,25 @@
             .where(predicate);
         },
         queryResult: (data: any) => {
-          let xArray = data.getChild("x").toArray();
-          let yArray = data.getChild("y").toArray();
-          let categoryArray = data.getChild("c")?.toArray() ?? null;
+          // Browser-side scatter pipeline timing — surfaces in DevTools.
+          // ``getChild().toArray()`` is the suspect: if DuckDB exports
+          // multi-chunk Arrow (default), this allocates a fresh
+          // Float32Array of N rows and memcpy's every chunk into it. With
+          // server-side ``combine_chunks`` we get a single chunk, and
+          // toArray returns the underlying buffer view at zero cost.
+          const t0 = performance.now();
+          const numRowsHint = (data && typeof data.numRows === "number") ? data.numRows : -1;
+          console.info(`[atlas-stage] scatter-queryResult arrived numRows=${numRowsHint} at ${t0.toFixed(0)}`);
+          let xArray, yArray, categoryArray;
+          try {
+            xArray = data.getChild("x").toArray();
+            yArray = data.getChild("y").toArray();
+            categoryArray = data.getChild("c")?.toArray() ?? null;
+          } catch (err) {
+            console.error(`[atlas-stage] scatter-queryResult toArray() failed:`, err);
+            throw err;
+          }
+          const t1 = performance.now();
 
           if (packed && packedBounds != null && (xArray instanceof Uint16Array || yArray instanceof Uint16Array)) {
             // Unpack u16 → f32 using the same linear map the server used
@@ -163,11 +286,19 @@
           if (categoryArray != null && !(categoryArray instanceof Uint8Array)) {
             categoryArray = new Uint8Array(categoryArray);
           }
+          const t2 = performance.now();
           xData = xArray;
           yData = yArray;
           categoryData = categoryArray;
           updateTooltip(null);
           updateSelection(null);
+          const n = xArray?.length ?? 0;
+          if (n > 1_000_000) {
+            const mb = (xArray.byteLength + yArray.byteLength + (categoryArray?.byteLength ?? 0)) / 1024 / 1024;
+            console.log(
+              `[scatter] ${n.toLocaleString()} pts (${mb.toFixed(0)} MB JS heap) | toArray=${(t1 - t0).toFixed(0)} ms | typed-array-coerce=${(t2 - t1).toFixed(0)} ms`,
+            );
+          }
         },
       });
       (client as any).reset = () => {
@@ -520,6 +651,7 @@
   theme={theme}
   config={config}
   data={{ x: xData, y: yData, category: categoryData }}
+  yIsAlreadyMercator={yIsAlreadyMercator}
   totalCount={totalCount}
   maxDensity={maxDensity}
   categoryCount={categoryCount}

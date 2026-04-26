@@ -61,16 +61,19 @@ def wkb_parquet(tmp_path):
     return path, n
 
 
-def test_loads_table_not_view(latlon_parquet):
+def test_default_materialise_is_view(latlon_parquet):
+    """Default fast path returns a VIEW — no full materialisation,
+    so initial render is fast. The server promotes view→table on the
+    first ALTER (see test_view_promotes_to_table_on_alter)."""
     path, n = latlon_parquet
     res = fast_load_parquet(str(path))
 
-    # Must be a TABLE — the viewer's color-by issues ALTER TABLE on it.
     kind = res.connection.sql(
         f"SELECT table_type FROM information_schema.tables "
         f"WHERE table_name = '{res.table}'"
     ).fetchone()
-    assert kind is not None and kind[0] == "BASE TABLE"
+    assert kind is not None and kind[0] == "VIEW"
+    assert res.is_view is True
 
     assert res.row_count == n
     assert res.x_column == "lon"
@@ -80,15 +83,54 @@ def test_loads_table_not_view(latlon_parquet):
     assert res.y_bounds is not None
 
 
-def test_table_supports_alter_add_column(latlon_parquet):
-    """The viewer's color-by clicks issue ALTER + UPDATE — they must
-    succeed against the loader's output table."""
+def test_eager_materialise_returns_table(latlon_parquet):
+    """``materialise='table'`` keeps the historic eager-CTAS contract for
+    callers (and tests) that need a TABLE before the function returns."""
     path, n = latlon_parquet
-    res = fast_load_parquet(str(path))
+    res = fast_load_parquet(str(path), materialise="table")
+
+    kind = res.connection.sql(
+        f"SELECT table_type FROM information_schema.tables "
+        f"WHERE table_name = '{res.table}'"
+    ).fetchone()
+    assert kind is not None and kind[0] == "BASE TABLE"
+    assert res.is_view is False
+
+    # Color-by ALTER + UPDATE must work directly against an eager-table load.
     con = res.connection
     con.execute(
         f'ALTER TABLE "{res.table}" ADD COLUMN __ev_test_id INTEGER DEFAULT 0'
     )
+    con.execute(
+        f'UPDATE "{res.table}" '
+        f'SET __ev_test_id = CASE WHEN lat > 0 THEN 1 ELSE 0 END'
+    )
+    counts = con.sql(
+        f'SELECT __ev_test_id, COUNT(*) FROM "{res.table}" GROUP BY __ev_test_id'
+    ).fetchall()
+    assert sum(c for _, c in counts) == n
+
+
+def test_view_promotes_to_table_on_alter(latlon_parquet):
+    """Server-side promotion: a view-backed dataset can be transparently
+    promoted to a table so color-by ALTER+UPDATE works. Mirrors the
+    promote logic in server.py::_ensure_dataset_materialised."""
+    path, n = latlon_parquet
+    res = fast_load_parquet(str(path))  # default = view
+    assert res.is_view is True
+    con = res.connection
+
+    # Promote — same SQL the server runs lazily on first non-readonly query.
+    cur = con.cursor()
+    try:
+        cur.execute(f'CREATE TABLE "__{res.table}_mat_tmp__" AS SELECT * FROM "{res.table}"')
+        cur.execute(f'DROP VIEW "{res.table}"')
+        cur.execute(f'ALTER TABLE "__{res.table}_mat_tmp__" RENAME TO "{res.table}"')
+    finally:
+        cur.close()
+
+    # Now ALTER+UPDATE works.
+    con.execute(f'ALTER TABLE "{res.table}" ADD COLUMN __ev_test_id INTEGER DEFAULT 0')
     con.execute(
         f'UPDATE "{res.table}" '
         f'SET __ev_test_id = CASE WHEN lat > 0 THEN 1 ELSE 0 END'
@@ -203,6 +245,102 @@ def test_geometry_column_extraction(wkb_parquet):
     assert rows[0][2] == pytest.approx(5.0)
     assert rows[2][1] == pytest.approx(0.2)
     assert rows[2][2] == pytest.approx(5.2)
+
+
+def test_precomputed_quantised_columns_present(latlon_parquet):
+    """When bounds are computable, the loader bakes __x_u16__/__y_u16__
+    into the CTAS so the wire scatter query becomes a pure scan."""
+    path, n = latlon_parquet
+    res = fast_load_parquet(str(path))
+    assert res.quantised_x_column == "__x_u16__"
+    assert res.quantised_y_column == "__y_u16__"
+    con = res.connection
+    cols = [r[1] for r in con.sql(f'PRAGMA table_info("{res.table}")').fetchall()]
+    assert "__x_u16__" in cols
+    assert "__y_u16__" in cols
+    # The u16 values must round-trip back to the original lon/lat (within
+    # the quantisation grid, ~range/65535).
+    rows = con.sql(
+        f'SELECT lon, lat, "__x_u16__", "__y_u16__" FROM "{res.table}" LIMIT 5'
+    ).fetchall()
+    x_min, x_max = res.x_bounds  # type: ignore[misc]
+    y_min, y_max = res.y_bounds  # type: ignore[misc]
+    x_range = x_max - x_min
+    y_range = y_max - y_min
+    for lon, lat, xq, yq in rows:
+        assert 0 <= xq <= 65535
+        assert 0 <= yq <= 65535
+        # Reconstructed value must be within one quantum of original.
+        x_recon = x_min + xq * (x_range / 65535)
+        y_recon = y_min + yq * (y_range / 65535)
+        assert abs(x_recon - lon) <= x_range / 65535 + 1e-9
+        assert abs(y_recon - lat) <= y_range / 65535 + 1e-9
+
+
+def test_precomputed_disabled_via_flag(latlon_parquet):
+    path, _ = latlon_parquet
+    res = fast_load_parquet(str(path), precompute_quantised=False)
+    assert res.quantised_x_column is None
+    assert res.quantised_y_column is None
+    cols = [r[1] for r in res.connection.sql(f'PRAGMA table_info("{res.table}")').fetchall()]
+    assert "__x_u16__" not in cols
+
+
+def test_low_cardinality_varchar_becomes_enum(tmp_path):
+    """ENUM auto-detection encodes low-cardinality string columns at CTAS,
+    so cat_count GROUP BY runs ~3× faster and the column storage drops
+    from VARCHAR overhead to a 1-byte ordinal."""
+    path = tmp_path / "cats.parquet"
+    n = 200
+    table = pa.table(
+        {
+            "lat": pa.array([float(i % 90) for i in range(n)]),
+            "lon": pa.array([float(i % 180 - 90) for i in range(n)]),
+            "category": pa.array([["A", "B", "C", "D"][i % 4] for i in range(n)]),
+            "wide": pa.array([f"row-{i}" for i in range(n)]),  # high-cardinality, not ENUM
+        }
+    )
+    pq.write_table(table, str(path))
+
+    res = fast_load_parquet(str(path), enum_threshold=10)
+    assert res.enum_columns is not None
+    assert "category" in res.enum_columns
+    assert sorted(res.enum_columns["category"]) == ["A", "B", "C", "D"]
+    # high-cardinality (200 distinct) must NOT be encoded
+    assert "wide" not in res.enum_columns
+
+    con = res.connection
+    # The ENUM-cast column must still query identically.
+    counts = sorted(
+        con.sql(f'SELECT category, COUNT(*) FROM "{res.table}" GROUP BY 1').fetchall()
+    )
+    assert counts == [("A", 50), ("B", 50), ("C", 50), ("D", 50)]
+    # And the column type is the ENUM, not VARCHAR.
+    type_row = con.sql(
+        f"SELECT data_type FROM information_schema.columns "
+        f"WHERE table_name = '{res.table}' AND column_name = 'category'"
+    ).fetchone()
+    assert type_row is not None
+    assert "ENUM" in type_row[0].upper()
+
+
+def test_enum_threshold_zero_disables(tmp_path):
+    path = tmp_path / "cats2.parquet"
+    table = pa.table(
+        {
+            "lat": pa.array([1.0, 2.0, 3.0]),
+            "lon": pa.array([1.0, 2.0, 3.0]),
+            "category": pa.array(["A", "B", "A"]),
+        }
+    )
+    pq.write_table(table, str(path))
+    res = fast_load_parquet(str(path), enum_threshold=0)
+    assert res.enum_columns is None or not res.enum_columns
+    type_row = res.connection.sql(
+        f"SELECT data_type FROM information_schema.columns "
+        f"WHERE table_name = '{res.table}' AND column_name = 'category'"
+    ).fetchone()
+    assert "ENUM" not in type_row[0].upper()
 
 
 def test_id_column_avoids_collision_with_existing_row_index(tmp_path):

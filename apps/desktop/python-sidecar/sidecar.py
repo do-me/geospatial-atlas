@@ -271,15 +271,59 @@ def _fast_load(
         labels=None,
         is_gis=True,
     )
-    # Surface the loader's bbox so the viewer issues u16-quantised
-    # scatter queries — 5 B/point instead of 9 B/point on the wire.
-    # Critical at 322 M-row scale: ~1.4 GB saved per full scatter pull.
-    if result.x_bounds is not None and result.y_bounds is not None:
-        projection = props.setdefault("data", {}).setdefault("projection", {})
-        projection["bounds"] = {
-            "x": list(result.x_bounds),
-            "y": list(result.y_bounds),
+    # Wire-packing strategy depends on row count — kept in lockstep with
+    # the same logic in packages/backend/embedding_atlas/cli.py:
+    # f32 wire (Path C) for ≤200M, u16 wire (Path A) for >200M to stay
+    # under V8's ~2 GB ArrayBuffer cap that ``mosaic-core``'s
+    # ``response.arrayBuffer()`` allocation depends on.
+    LARGE_ROW_THRESHOLD = 200_000_000
+    is_very_large = result.row_count > LARGE_ROW_THRESHOLD
+    if (
+        result.x_bounds is not None
+        and result.y_bounds is not None
+        and "data" in props
+        and "projection" in props["data"]
+    ):
+        x_min, x_max = result.x_bounds
+        y_min, y_max = result.y_bounds
+        props["data"]["projection"]["viewportHint"] = {
+            "centerX": 0.5 * (x_min + x_max),
+            "centerY": 0.5 * (y_min + y_max),
+            "rangeX": x_max - x_min,
+            "rangeY": y_max - y_min,
+            "rowCount": result.row_count,
         }
+        if is_very_large:
+            use_merc_y = (
+                result.quantised_merc_y_column is not None
+                and result.merc_y_bounds is not None
+            )
+            if use_merc_y:
+                merc_y_min, merc_y_max = result.merc_y_bounds
+                props["data"]["projection"]["bounds"] = {
+                    "x": [x_min, x_max],
+                    "y": [merc_y_min, merc_y_max],
+                }
+            else:
+                props["data"]["projection"]["bounds"] = {
+                    "x": [x_min, x_max],
+                    "y": [y_min, y_max],
+                }
+            if (
+                result.quantised_x_column is not None
+                and result.quantised_y_column is not None
+            ):
+                y_u16_col = (
+                    result.quantised_merc_y_column
+                    if use_merc_y
+                    else result.quantised_y_column
+                )
+                props["data"]["projection"]["precomputed"] = {
+                    "x_u16": result.quantised_x_column,
+                    "y_u16": y_u16_col,
+                    "y_is_mercator": use_merc_y,
+                }
+            props["data"]["projection"]["viewportHint"]["skipDeferredRefine"] = True
     metadata = {"props": props}
     identifier = sha256_hexdigest(
         [__version__, [dataset_path], metadata], scope="DataSource"
@@ -289,7 +333,42 @@ def _fast_load(
         f"fast load done: {result.row_count:,} rows in {result.duration_seconds:.2f}s "
         f"(x={result.x_column}, y={result.y_column}, text={resolved_text})"
     )
-    return con, data_source, metadata, True
+    # Build the prewarm SQL identical to what the viewer's Mosaic client
+    # constructs — see ``EmbeddingViewMosaic.svelte`` Path C. A byte-
+    # identical SQL string is required for the cache key to hit. Returned
+    # alongside the connection so ``main()`` can pass it to make_server.
+    is_gis = props.get("data", {}).get("projection", {}).get("isGis", False)
+    if is_very_large and "precomputed" in props.get("data", {}).get("projection", {}):
+        precomputed = props["data"]["projection"]["precomputed"]
+        prewarm_sql = (
+            f'SELECT "{precomputed["x_u16"]}" AS "x", '
+            f'"{precomputed["y_u16"]}" AS "y" '
+            f'FROM "{result.table}"'
+        )
+    elif is_very_large and "bounds" in props.get("data", {}).get("projection", {}):
+        x_min, x_max = result.x_bounds
+        y_min, y_max = result.y_bounds
+        x_scale = 65535 / (x_max - x_min)
+        y_scale = 65535 / (y_max - y_min)
+        prewarm_sql = (
+            f'SELECT '
+            f'((COALESCE("{result.x_column}", {x_min}) - {x_min}) * {x_scale})::USMALLINT AS "x", '
+            f'((COALESCE("{result.y_column}", {y_min}) - {y_min}) * {y_scale})::USMALLINT AS "y" '
+            f'FROM "{result.table}"'
+        )
+    elif is_gis:
+        prewarm_sql = (
+            f'SELECT "{result.x_column}"::FLOAT AS "x", '
+            f'(LN(TAN(PI()/4 + "{result.y_column}" * PI() / 360))*180/PI())::FLOAT AS "y" '
+            f'FROM "{result.table}"'
+        )
+    else:
+        prewarm_sql = (
+            f'SELECT "{result.x_column}"::FLOAT AS "x", '
+            f'"{result.y_column}"::FLOAT AS "y" '
+            f'FROM "{result.table}"'
+        )
+    return con, data_source, metadata, True, prewarm_sql, result
 
 
 def _add_shutdown_endpoint(app) -> None:
@@ -348,7 +427,7 @@ def main() -> int:
     if len(sys.argv) >= 4 and sys.argv[3].strip():
         text_column = sys.argv[3].strip()
     _log(f"using row limit: {limit if limit else 'none'}; text column: {text_column!r}")
-    connection, data_source, _meta, _is_gis = _fast_load(
+    connection, data_source, _meta, _is_gis, _prewarm_sql, _result = _fast_load(
         dataset_path, limit=limit, text_column=text_column
     )
     static_path = _resolve_static_dir()
@@ -361,6 +440,11 @@ def main() -> int:
         mcp=enable_mcp,
         cors=False,
         duckdb_connection=connection,
+        dataset_is_view=_result.is_view,
+        materialise_thread=_result.materialise_thread,
+        materialise_table=_result.materialise_table,
+        materialise_error=_result.materialise_error,
+        prewarm_arrow_queries=[_prewarm_sql],
     )
     _add_shutdown_endpoint(app)
 

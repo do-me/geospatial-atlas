@@ -94,6 +94,40 @@ class FastLoadResult:
     # wire — the frontend sends a MIN-MAX linear map to pack f32 → u16.
     x_bounds: tuple[float, float] | None = None
     y_bounds: tuple[float, float] | None = None
+    # Pre-computed u16-quantised x/y column names (or ``None`` if bounds
+    # weren't available at CTAS time). When present, the wire scatter
+    # query is just ``SELECT __x_u16__, __y_u16__ FROM dataset`` — no
+    # per-row arithmetic, no clamps, ~6× faster than the on-the-fly cast
+    # at 300 M-row scale.
+    quantised_x_column: str | None = None
+    quantised_y_column: str | None = None
+    # Mercator-projected y, also packed as u16 over [merc_y_min, merc_y_max].
+    # Only populated when ``y`` is in geographic latitude space (-90..90 deg);
+    # ``merc_y_bounds`` is the linear range to use for unpacking on the wire.
+    # Lets the GIS fast-path skip the JS-side Mercator loop entirely (~5.9 s
+    # on 322 M rows on Apple-Silicon Chrome).
+    quantised_merc_y_column: str | None = None
+    merc_y_bounds: tuple[float, float] | None = None
+    # Low-cardinality VARCHAR columns that were ENUM-encoded at CTAS.
+    # Maps original column name -> ordered list of distinct values
+    # (the ENUM ordinal is the index into the list). Empty if no
+    # columns qualified or auto-encoding was disabled.
+    enum_columns: dict[str, list[str]] | None = None
+    # True when ``dataset`` is currently exposed as a VIEW over the
+    # source parquet (no full materialisation). The server promotes it
+    # to a TABLE on the first ALTER/UPDATE so color-by clicks work.
+    is_view: bool = False
+    # Background-materialise thread: when ``is_view`` is True, a daemon
+    # thread runs ``CREATE TABLE <materialise_table> AS SELECT * FROM
+    # dataset`` immediately after the loader returns. The server's
+    # ``_ensure_dataset_materialised`` joins this thread on the first
+    # write — by which point the CTAS is usually already done, so the
+    # color-by ALTER/UPDATE pays a near-zero swap (DROP VIEW + RENAME)
+    # instead of a fresh ~5 s CTAS. Errors are captured in
+    # ``materialise_error`` and the server falls back to synchronous CTAS.
+    materialise_thread: "threading.Thread | None" = None
+    materialise_table: str | None = None
+    materialise_error: list | None = None
 
 
 def _detect_columns(
@@ -141,6 +175,10 @@ def fast_load_parquet(
     enable_spatial: bool | None = None,
     limit: int | None = None,
     progress: ProgressCallback | None = None,
+    precompute_quantised: bool = True,
+    enum_threshold: int = 1024,
+    materialise: Literal["view", "table"] = "view",
+    enum_sample_rows: int = 100_000,
 ) -> FastLoadResult:
     """Expose a parquet file as a DuckDB VIEW on a fresh ``:memory:`` connection.
 
@@ -224,15 +262,16 @@ def fast_load_parquet(
 
     limit_clause = f" LIMIT {int(limit)}" if limit is not None else ""
 
+    # Resolve x_out/y_out + the SELECT projection expressions. We need
+    # x_out/y_out *before* the CTAS so the bounds pre-pass can target them
+    # (when they come from ST_X/ST_Y of a geometry column there's no
+    # column to bound on the parquet side, so we hold off in that case).
     if kind == "xy":
         x_col, y_col = info  # type: ignore[misc]
         x_out, y_out = x_col, y_col
-        select = (
-            f"SELECT {passthrough}, "
-            f"{id_expr} AS {quote_ident(id_column)} "
-            f"FROM {read}{limit_clause}"
-        )
+        coord_select = ""  # x_out / y_out already exist in the source
         detail = f"Using columns {x_col} / {y_col}"
+        coord_source_for_bounds = (x_col, y_col)
     else:
         geom = str(info)  # type: ignore[arg-type]
         geom_type = col_types.get(geom, "").upper()
@@ -242,7 +281,6 @@ def fast_load_parquet(
                 "File uses native GEOMETRY column but DuckDB spatial extension "
                 "could not be loaded (is this machine offline on first run?)"
             )
-        # Reserve lon/lat names if they're not already taken.
         x_out = _unused_name(columns, "lon")
         y_out = _unused_name(columns + [x_out], "lat")
         geom_expr = (
@@ -250,48 +288,298 @@ def fast_load_parquet(
             if is_native_geometry
             else f"ST_GeomFromWKB({quote_ident(geom)})"
         )
-        select = (
-            f"SELECT {passthrough}, "
+        coord_select = (
             f"ST_X({geom_expr}) AS {quote_ident(x_out)}, "
             f"ST_Y({geom_expr}) AS {quote_ident(y_out)}, "
-            f"{id_expr} AS {quote_ident(id_column)} "
-            f"FROM {read}{limit_clause}"
         )
         detail = (
             f"Extracting coordinates from {geom} "
             f"({'native GEOMETRY' if is_native_geometry else 'WKB'})"
         )
+        # Geometry path: bounds need ST_X/ST_Y, no plain column to scan
+        # on the parquet side. Compute bounds post-CTAS.
+        coord_source_for_bounds = None
 
-    # Materialise into a TABLE (not a VIEW). The viewer's color-by
-    # path issues ``ALTER TABLE ... ADD COLUMN`` + ``UPDATE`` against
-    # this name on every selection — DuckDB rejects both against a
-    # view, so a view-backed dataset hard-fails the user's first click.
-    sql = f"CREATE OR REPLACE TABLE {quote_ident(table)} AS {select}"
+    # Pre-CTAS bounds pass (xy mode only). DuckDB reads parquet column
+    # statistics from the file footer if the writer included them — turns
+    # MIN/MAX into a footer read in tens of milliseconds, even on 300M
+    # rows. If stats are missing we fall through to a streaming scan via
+    # read_parquet, still cheap because we only touch x/y columns.
+    x_bounds: tuple[float, float] | None = None
+    y_bounds: tuple[float, float] | None = None
+    if coord_source_for_bounds is not None:
+        emit("bounds_pre", 9.0, "Reading bounds from parquet metadata")
+        x_src, y_src = coord_source_for_bounds
+        try:
+            row = con.sql(
+                f"SELECT MIN({quote_ident(x_src)}), MAX({quote_ident(x_src)}), "
+                f"MIN({quote_ident(y_src)}), MAX({quote_ident(y_src)}) "
+                f"FROM {read}"
+            ).fetchone()
+            if row is not None and all(v is not None for v in row):
+                x_min, x_max, y_min, y_max = (float(v) for v in row)
+                if x_max > x_min:
+                    x_bounds = (x_min, x_max)
+                if y_max > y_min:
+                    y_bounds = (y_min, y_max)
+        except Exception:
+            pass
+
+    # ENUM auto-detection on VARCHAR columns. Three-stage funnel — total
+    # cost on a 75 M-row, 11-VARCHAR-col file drops from ~1.3 s (per-col
+    # full-file HLL) to ~0.4 s.
+    #
+    #   1. Sample prefilter: APPROX_COUNT_DISTINCT on a LIMIT-N stub
+    #      (~60 ms for 100 k rows, all 11 cols in one query). Anything
+    #      with > 2× threshold distincts in 100 k samples cannot fit in
+    #      ``enum_threshold`` globally — drop it.
+    #   2. Full-file HLL on the survivors (one fused scan).
+    #   3. Exact ``LIST(DISTINCT …)`` per column that crossed step 2,
+    #      again fused into a single scan.
+    #
+    # Each pass reads strictly fewer columns than the previous, and
+    # DuckDB's parquet reader column-prunes accordingly. Storage in the
+    # final dataset drops from ~9 B/row VARCHAR to 1 B/row ENUM ordinal
+    # for each encoded column.
+    enum_columns: dict[str, list[str]] = {}
+    if enum_threshold > 0:
+        varchar_cols = [
+            c
+            for c, t in col_types.items()
+            if t.upper() in ("VARCHAR", "STRING", "TEXT")
+        ]
+        if varchar_cols:
+            try:
+                emit("enum_prefilter", 9.5, f"Sampling {len(varchar_cols)} VARCHAR columns")
+                # Stage 1: cheap LIMIT prefilter. 2× slack accounts for
+                # cardinality under-estimation in a small sample.
+                slack = max(2 * enum_threshold, enum_threshold + 64)
+                sel = ", ".join(
+                    f"APPROX_COUNT_DISTINCT({quote_ident(c)}) AS {quote_ident(c)}"
+                    for c in varchar_cols
+                )
+                row = con.sql(
+                    f"WITH s AS (SELECT * FROM {read} LIMIT {int(enum_sample_rows)}) "
+                    f"SELECT {sel} FROM s"
+                ).fetchone()
+                survivors = (
+                    [c for c, n in zip(varchar_cols, row) if n is not None and n <= slack]
+                    if row is not None
+                    else []
+                )
+
+                if survivors:
+                    # Stage 2: full-file HLL on survivors (one parquet scan,
+                    # fused aggregates).
+                    sel = ", ".join(
+                        f"APPROX_COUNT_DISTINCT({quote_ident(c)}) AS {quote_ident(c)}"
+                        for c in survivors
+                    )
+                    row = con.sql(f"SELECT {sel} FROM {read}").fetchone()
+                    keepers = (
+                        [c for c, n in zip(survivors, row) if n is not None and n <= enum_threshold]
+                        if row is not None
+                        else []
+                    )
+
+                    if keepers:
+                        # Stage 3: exact distinct values, fused.
+                        sel = ", ".join(
+                            f"LIST(DISTINCT {quote_ident(c)}) FILTER (WHERE {quote_ident(c)} IS NOT NULL) AS {quote_ident(c)}"
+                            for c in keepers
+                        )
+                        listed = con.sql(f"SELECT {sel} FROM {read}").fetchone()
+                        if listed is not None:
+                            for col, values in zip(keepers, listed):
+                                if values and 0 < len(values) <= enum_threshold:
+                                    enum_columns[col] = sorted(values)
+            except Exception:
+                # ENUM detection is best-effort: an unusual collation or
+                # blob-typed VARCHAR shouldn't fail the load.
+                pass
+
+    # Build the CTAS SELECT list with: passthrough columns (with ENUM
+    # casts where applicable), synthetic coords (geometry path), pre-
+    # quantised __x_u16__/__y_u16__ when we have bounds, and the row id.
+    quant_x_col: str | None = None
+    quant_y_col: str | None = None
+
+    # GEOMETRY columns can't be serialised to Arrow IPC by DuckDB's spatial
+    # extension — the moment Mosaic's instances table issues
+    # ``SELECT * FROM dataset`` (or even ``DESC SELECT *``), the request
+    # 500s with ``TransactionContext::ActiveTransaction called without
+    # active transaction``. Cast each GEOMETRY column to TEXT (WKT) in the
+    # view: same data, Arrow-IPC-safe, and the per-row WKT string only
+    # materialises when a query actually selects the column.
+    geom_columns = [
+        c for c, t in col_types.items() if t.upper().startswith("GEOMETRY")
+    ]
+
+    if enum_columns or geom_columns:
+        # Create one ENUM type per encoded column. Names are scoped by
+        # column to avoid collisions across multiple datasets in the same
+        # process (CREATE OR REPLACE handles re-loads).
+        for col, values in enum_columns.items():
+            type_name = _enum_type_name(table, col)
+            literal_list = ", ".join("'" + v.replace("'", "''") + "'" for v in values)
+            con.sql(f"CREATE OR REPLACE TYPE {quote_ident(type_name)} AS ENUM ({literal_list})")
+        # Replace the passthrough * with explicit projections so we can
+        # cast just the ENUM and GEOMETRY cols. Anything else passes
+        # through unchanged.
+        rewritten = list(enum_columns.keys()) + geom_columns
+        excludes = (["file_row_number"] + rewritten) if not has_frn_collision else rewritten
+        passthrough = "* EXCLUDE (" + ", ".join(quote_ident(e) for e in excludes) + ")"
+        casts = []
+        for col in enum_columns:
+            casts.append(
+                f"{quote_ident(col)}::{quote_ident(_enum_type_name(table, col))} AS {quote_ident(col)}"
+            )
+        for col in geom_columns:
+            casts.append(f"{quote_ident(col)}::TEXT AS {quote_ident(col)}")
+        cast_clause = ", " + ", ".join(casts)
+    else:
+        cast_clause = ""
+
+    quant_clause = ""
+    quant_merc_y_col: str | None = None
+    merc_y_bounds: tuple[float, float] | None = None
+    if precompute_quantised and x_bounds is not None and y_bounds is not None:
+        quant_x_col = _unused_name(columns + [id_column, x_out, y_out], "__x_u16__")
+        quant_y_col = _unused_name(columns + [id_column, x_out, y_out, quant_x_col], "__y_u16__")
+        x_min, x_max = x_bounds
+        y_min, y_max = y_bounds
+        x_scale = 65535.0 / (x_max - x_min)
+        y_scale = 65535.0 / (y_max - y_min)
+        # GREATEST/LEAST runs once at load — paranoid safety against
+        # NULLs / edge bound rows (NULLs cast to NULL in DuckDB; clamps
+        # squash any near-bound float drift). After this, the wire path
+        # can be a clamp-free SELECT __x_u16__, __y_u16__.
+        x_q_expr = (
+            f"GREATEST(0, LEAST(65535, "
+            f"((COALESCE({quote_ident(x_out)}, {x_min}) - ({x_min!r})) * {x_scale!r}))"
+            f")::USMALLINT"
+        )
+        y_q_expr = (
+            f"GREATEST(0, LEAST(65535, "
+            f"((COALESCE({quote_ident(y_out)}, {y_min}) - ({y_min!r})) * {y_scale!r}))"
+            f")::USMALLINT"
+        )
+        quant_clause = f", {x_q_expr} AS {quote_ident(quant_x_col)}, {y_q_expr} AS {quote_ident(quant_y_col)}"
+
+        # Mercator-projected y, also packed as u16. For GIS datasets the
+        # browser would otherwise have to project lat→Mercator on the JS
+        # main thread for every row before paint — ~5.9 s on 322 M rows.
+        # Pre-projecting at view-definition time pushes that into DuckDB's
+        # vectorised C++ engine and out of the cold-load path entirely.
+        # Bounds are valid only when ``y`` is in geographic latitude space
+        # (-90..90); we range-check rather than relying on a user flag so
+        # the same loader works for embedding (non-GIS) datasets without
+        # spurious wraps.
+        is_lat_like = -90.5 <= y_min <= y_max <= 90.5
+        if is_lat_like:
+            import math
+            merc_y_min = math.log(math.tan(math.pi / 4 + y_min * math.pi / 360)) * 180 / math.pi
+            merc_y_max = math.log(math.tan(math.pi / 4 + y_max * math.pi / 360)) * 180 / math.pi
+            if merc_y_max > merc_y_min:
+                merc_y_scale = 65535.0 / (merc_y_max - merc_y_min)
+                quant_merc_y_col = _unused_name(
+                    columns + [id_column, x_out, y_out, quant_x_col, quant_y_col],
+                    "__y_merc_u16__",
+                )
+                # Inline mercator(lat) → linear-pack to u16. The CASE on
+                # COALESCE keeps NULL → 0 (clamped to mid-band) without
+                # exploding tan() near the poles for legitimate edge values.
+                merc_q_expr = (
+                    f"GREATEST(0, LEAST(65535, "
+                    f"(((LN(TAN(PI()/4 + COALESCE({quote_ident(y_out)}, {y_min}) * PI() / 360)) * 180 / PI()) - ({merc_y_min!r})) * {merc_y_scale!r})"
+                    f"))::USMALLINT"
+                )
+                quant_clause += f", {merc_q_expr} AS {quote_ident(quant_merc_y_col)}"
+                merc_y_bounds = (merc_y_min, merc_y_max)
+
+    select = (
+        f"SELECT {passthrough}, "
+        f"{coord_select}"
+        f"{id_expr} AS {quote_ident(id_column)}"
+        f"{cast_clause}"
+        f"{quant_clause} "
+        f"FROM {read}{limit_clause}"
+    )
+
+    # Two materialisation strategies:
+    #
+    #   "view"  — default. The dataset is a VIEW over read_parquet(...),
+    #             with quantised cols and ENUM casts inlined. First map
+    #             render reads only x/y columns from parquet (≤ 1 s on
+    #             75 M rows). The server lazily promotes the view to a
+    #             TABLE on the first ALTER/UPDATE so color-by clicks
+    #             work — saving 3.5 s of upfront wall time when the user
+    #             never color-bys.
+    #
+    #   "table" — eager CREATE TABLE AS SELECT. Used by tests and any
+    #             caller that wants the historic semantics (full table
+    #             materialised before the function returns).
+    is_view = materialise == "view"
+    obj_kw = "VIEW" if is_view else "TABLE"
+    sql = f"CREATE OR REPLACE {obj_kw} {quote_ident(table)} AS {select}"
     emit("load", 10.0, detail)
-    _run_with_progress(con, sql, emit)
+    if is_view:
+        # CREATE VIEW is a metadata-only operation — no scan, < 10 ms.
+        con.execute(sql)
+    else:
+        _run_with_progress(con, sql, emit)
 
     emit("count", 80.0, "Counting rows")
     row_count = con.sql(f"SELECT COUNT(*) FROM {quote_ident(table)}").fetchone()[0]
 
-    emit("bounds", 90.0, "Computing bounding box")
-    x_bounds: tuple[float, float] | None = None
-    y_bounds: tuple[float, float] | None = None
-    try:
-        row = con.sql(
-            f"SELECT MIN({quote_ident(x_out)}), MAX({quote_ident(x_out)}), "
-            f"MIN({quote_ident(y_out)}), MAX({quote_ident(y_out)}) "
-            f"FROM {quote_ident(table)}"
-        ).fetchone()
-        if row is not None and all(v is not None for v in row):
-            x_min, x_max, y_min, y_max = (float(v) for v in row)
-            if x_max > x_min:
-                x_bounds = (x_min, x_max)
-            if y_max > y_min:
-                y_bounds = (y_min, y_max)
-    except Exception:
-        pass
+    if x_bounds is None or y_bounds is None:
+        emit("bounds", 90.0, "Computing bounding box (post-CTAS fallback)")
+        try:
+            row = con.sql(
+                f"SELECT MIN({quote_ident(x_out)}), MAX({quote_ident(x_out)}), "
+                f"MIN({quote_ident(y_out)}), MAX({quote_ident(y_out)}) "
+                f"FROM {quote_ident(table)}"
+            ).fetchone()
+            if row is not None and all(v is not None for v in row):
+                x_min, x_max, y_min, y_max = (float(v) for v in row)
+                if x_max > x_min:
+                    x_bounds = (x_min, x_max)
+                if y_max > y_min:
+                    y_bounds = (y_min, y_max)
+        except Exception:
+            pass
 
     emit("ready", 100.0, f"Loaded {row_count:,} rows")
+    extra_cols = [c for c in (x_out, y_out, id_column, quant_x_col, quant_y_col, quant_merc_y_col) if c is not None and c not in columns]
+
+    # Kick off background materialisation when we returned a VIEW. The
+    # CTAS runs in parallel with the first read queries and the server's
+    # write path joins this thread on the first ALTER, turning a 5 s
+    # color-by surprise into a near-instant DROP VIEW + RENAME.
+    bg_thread: threading.Thread | None = None
+    bg_table: str | None = None
+    bg_error: list = []
+    if is_view:
+        bg_table = _unused_name(columns + extra_cols + [table], f"__bg_mat_{table}__")
+        bg_table_local = bg_table
+
+        def _bg_materialise() -> None:
+            try:
+                cursor = con.cursor()
+                try:
+                    cursor.execute(
+                        f"CREATE TABLE {quote_ident(bg_table_local)} AS SELECT * FROM {quote_ident(table)}"
+                    )
+                finally:
+                    cursor.close()
+            except BaseException as e:  # noqa: BLE001 — logged for the server
+                bg_error.append(e)
+
+        bg_thread = threading.Thread(
+            target=_bg_materialise, name="fast-load-bg-mat", daemon=True
+        )
+        bg_thread.start()
+
     return FastLoadResult(
         connection=con,
         table=table,
@@ -299,11 +587,28 @@ def fast_load_parquet(
         x_column=x_out,
         y_column=y_out,
         id_column=id_column,
-        columns=columns + [c for c in (x_out, y_out, id_column) if c not in columns],
+        columns=columns + extra_cols,
         duration_seconds=time.perf_counter() - t_start,
         x_bounds=x_bounds,
         y_bounds=y_bounds,
+        quantised_x_column=quant_x_col,
+        quantised_y_column=quant_y_col,
+        quantised_merc_y_column=quant_merc_y_col,
+        merc_y_bounds=merc_y_bounds,
+        enum_columns=enum_columns or None,
+        is_view=is_view,
+        materialise_thread=bg_thread,
+        materialise_table=bg_table,
+        materialise_error=bg_error,
     )
+
+
+def _enum_type_name(table: str, col: str) -> str:
+    """Build a per-(table, col) ENUM type name. Lower-cased + sanitised so
+    we don't collide across runs of the same loader against different
+    datasets in the same process."""
+    safe = "".join(ch if ch.isalnum() else "_" for ch in col).lower()
+    return f"_gsa_enum_{table}_{safe}"
 
 
 def _run_with_progress(

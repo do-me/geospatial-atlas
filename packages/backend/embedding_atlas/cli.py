@@ -400,16 +400,82 @@ def _run_fast_path(
         labels=None,
         is_gis=True,
     )
-    # Attach bbox so the viewer can issue u16-quantised scatter queries —
-    # saves ~44 % of the Arrow wire payload for the main scatter query
-    # (9 B/point → 5 B/point). Only advertised when we actually know the
-    # bbox; the viewer falls back to plain FLOAT when it's missing.
-    if fast_connection.x_bounds is not None and fast_connection.y_bounds is not None:
-        projection = props.setdefault("data", {}).setdefault("projection", {})
-        projection["bounds"] = {
-            "x": list(fast_connection.x_bounds),
-            "y": list(fast_connection.y_bounds),
+    # Wire-packing strategy depends on row count:
+    #
+    # row_count <= 200 M  → f32 wire (Path C). ~2 m precision at the
+    #   equator (sub-pixel at any zoom). 9 B/point. For 200 M rows that
+    #   is 1.8 GB on the wire — under V8's hard 2 GB ArrayBuffer cap that
+    #   ``mosaic-core``'s ``response.arrayBuffer()`` allocation depends on.
+    #
+    # row_count > 200 M  → u16 wire (Path A: precomputed __x_u16__ /
+    #   __y_u16__ columns from ``fast_load_parquet``). 5 B/point. For
+    #   322 M rows that is 1.6 GB — fits the cap. The grid quantization
+    #   (~611 m × 305 m at global lon/lat extent) is invisible at the
+    #   continental zoom levels at which a 322 M-row dataset is actually
+    #   useful — every grid cell holds dozens of points and the density
+    #   blur smooths over them. At city zoom the density is so high
+    #   (single grid cell ≫ visible pixels) that quantization aliases
+    #   into the same pixel cluster.
+    #
+    # In BOTH cases we advertise ``viewportHint`` so ``queryApproximateDensity``
+    # skips its 5 s ``APPROX_QUANTILE + STDDEV`` round trip on cold load.
+    LARGE_ROW_THRESHOLD = 200_000_000
+    is_very_large = fast_connection.row_count > LARGE_ROW_THRESHOLD
+    if (
+        fast_connection.x_bounds is not None
+        and fast_connection.y_bounds is not None
+        and "data" in props
+        and "projection" in props["data"]
+    ):
+        x_min, x_max = fast_connection.x_bounds
+        y_min, y_max = fast_connection.y_bounds
+        props["data"]["projection"]["viewportHint"] = {
+            "centerX": 0.5 * (x_min + x_max),
+            "centerY": 0.5 * (y_min + y_max),
+            "rangeX": x_max - x_min,
+            "rangeY": y_max - y_min,
+            "rowCount": fast_connection.row_count,
         }
+        if is_very_large:
+            # Trigger Path A in EmbeddingViewMosaic: pre-quantized cols,
+            # zero per-row arithmetic in the SQL. When the loader produced
+            # a Mercator-packed y column, use that — saves ~5.9 s of JS
+            # Mercator on 322 M rows by pushing the projection into DuckDB
+            # at view-definition time.
+            use_merc_y = (
+                fast_connection.quantised_merc_y_column is not None
+                and fast_connection.merc_y_bounds is not None
+            )
+            if use_merc_y:
+                merc_y_min, merc_y_max = fast_connection.merc_y_bounds
+                props["data"]["projection"]["bounds"] = {
+                    "x": [x_min, x_max],
+                    "y": [merc_y_min, merc_y_max],
+                }
+            else:
+                props["data"]["projection"]["bounds"] = {
+                    "x": [x_min, x_max],
+                    "y": [y_min, y_max],
+                }
+            if (
+                fast_connection.quantised_x_column is not None
+                and fast_connection.quantised_y_column is not None
+            ):
+                y_u16_col = (
+                    fast_connection.quantised_merc_y_column
+                    if use_merc_y
+                    else fast_connection.quantised_y_column
+                )
+                props["data"]["projection"]["precomputed"] = {
+                    "x_u16": fast_connection.quantised_x_column,
+                    "y_u16": y_u16_col,
+                    "y_is_mercator": use_merc_y,
+                }
+            # Tell the browser to skip the deferred density refinement
+            # (which is a 200 s+ APPROX_QUANTILE on 322 M rows). The
+            # ``viewportHint`` is good enough — sub-percent error in the
+            # density colour ramp is invisible at continental zoom.
+            props["data"]["projection"]["viewportHint"]["skipDeferredRefine"] = True
     metadata = {"props": props}
     identifier = sha256_hexdigest(
         [__version__, [fast_connection.table], metadata], scope="DataSource"
@@ -428,6 +494,54 @@ def _run_fast_path(
                 domain.strip() for domain in cors.split(",") if domain.strip()
             ]
 
+    # Pre-warm the scatter query — this is the single biggest cold-load
+    # round trip on the GIS fast path (~3-4 s for 75 M rows). The viewer
+    # builds the SQL via Mosaic from these exact columns and casts; we
+    # mirror that string here so the cache hit is byte-identical when the
+    # browser fires its first scatter request. The prewarm thread runs
+    # in parallel with uvicorn startup + JS bundle download, so the user
+    # doesn't pay any extra wall time.
+    x_col = fast_connection.x_column
+    y_col = fast_connection.y_column
+    is_gis = props.get("data", {}).get("projection", {}).get("isGis", False)
+    # Mirror the wire-packing path the browser actually uses so the
+    # cache key is byte-identical and the prewarm hits.
+    if is_very_large and "precomputed" in props.get("data", {}).get("projection", {}):
+        # Path A — precomputed u16 columns, no per-row arithmetic.
+        precomputed = props["data"]["projection"]["precomputed"]
+        prewarm_sql = (
+            f'SELECT "{precomputed["x_u16"]}" AS "x", '
+            f'"{precomputed["y_u16"]}" AS "y" '
+            f'FROM "{fast_connection.table}"'
+        )
+    elif is_very_large and "bounds" in props.get("data", {}).get("projection", {}):
+        # Path B — on-the-fly USMALLINT cast (fallback when precomputed
+        # cols weren't generated).
+        x_min, x_max = fast_connection.x_bounds
+        y_min, y_max = fast_connection.y_bounds
+        x_scale = 65535 / (x_max - x_min)
+        y_scale = 65535 / (y_max - y_min)
+        prewarm_sql = (
+            f'SELECT '
+            f'((COALESCE("{x_col}", {x_min}) - {x_min}) * {x_scale})::USMALLINT AS "x", '
+            f'((COALESCE("{y_col}", {y_min}) - {y_min}) * {y_scale})::USMALLINT AS "y" '
+            f'FROM "{fast_connection.table}"'
+        )
+    elif is_gis:
+        # Path C with GIS — server-side Mercator on f32 wire.
+        prewarm_sql = (
+            f'SELECT "{x_col}"::FLOAT AS "x", '
+            f'(LN(TAN(PI()/4 + "{y_col}" * PI() / 360))*180/PI())::FLOAT AS "y" '
+            f'FROM "{fast_connection.table}"'
+        )
+    else:
+        # Path C non-GIS — plain f32 cast.
+        prewarm_sql = (
+            f'SELECT "{x_col}"::FLOAT AS "x", '
+            f'"{y_col}"::FLOAT AS "y" '
+            f'FROM "{fast_connection.table}"'
+        )
+
     app = make_server(
         data_source,
         static_path=static,
@@ -435,6 +549,11 @@ def _run_fast_path(
         mcp=enable_mcp,
         cors=cors_config,
         duckdb_connection=con,
+        dataset_is_view=fast_connection.is_view,
+        materialise_thread=fast_connection.materialise_thread,
+        materialise_table=fast_connection.materialise_table,
+        materialise_error=fast_connection.materialise_error,
+        prewarm_arrow_queries=[prewarm_sql],
     )
 
     new_port = (

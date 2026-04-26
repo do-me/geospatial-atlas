@@ -30,6 +30,39 @@ export interface EmbeddingViewMosaicProps {
    *  Leave unset to stream f32 directly. */
   bounds?: { x: [number, number]; y: [number, number] } | null;
 
+  /** Names of pre-computed u16-quantised x/y columns on the source table.
+   *  When set, the scatter query becomes a pure ``SELECT x_u16, y_u16``
+   *  scan — no per-row arithmetic, no bounds clamps. The loader fills
+   *  these at CTAS time once the bounds are known.
+   *
+   *  Requires `bounds` to be set as well (the same linear map is used
+   *  to unpack u16 → f32 on the client side). */
+  precomputed?: {
+    x_u16: string;
+    y_u16: string;
+    /** When true, ``y_u16`` encodes Mercator-projected y over the
+     *  Mercator-projected y bounds (advertised in ``bounds.y``). The
+     *  view skips its JS Mercator loop in this case. */
+    y_is_mercator?: boolean;
+  } | null;
+
+  /** Optional viewport defaults derived from the dataset bounds. When
+   *  present, the view skips the cold-load APPROX_QUANTILE+STDDEV round
+   *  trip (≈5 s on 75 M-row GIS datasets) and centers the camera using
+   *  the bbox midpoint with a scaler sized to fit the bbox. The hint is
+   *  *never* used for wire packing — pass it independently of `bounds`
+   *  so the f32 wire path stays in effect and quantization stays off. */
+  viewportHint?: {
+    centerX: number;
+    centerY: number;
+    rangeX: number;
+    rangeY: number;
+    rowCount?: number;
+    /** When true, the view does NOT fire its post-mount density refinement
+     *  query. Set by the loader for very-large (> 200 M-row) datasets. */
+    skipDeferredRefine?: boolean;
+  } | null;
+
   /** The name of the category column.
    *  The categories should be represented as integers starting from 0.
    *  If you have categories represented as strings, you should first convert them to 0-indexed integers. */

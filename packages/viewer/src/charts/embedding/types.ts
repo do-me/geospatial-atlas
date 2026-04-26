@@ -17,6 +17,24 @@ export interface EmbeddingSpec {
     /** Axis-aligned bounds for (x, y). When set, the scatter query packs
      *  coordinates as u16 on the wire — see `EmbeddingViewMosaic`. */
     bounds?: { x: [number, number]; y: [number, number] } | null;
+    /** Names of pre-computed u16-quantised x/y columns on the source
+     *  table. When set, the scatter query is a pure scan — no per-row
+     *  arithmetic. The loader fills these at CTAS time. */
+    precomputed?: { x_u16: string; y_u16: string; y_is_mercator?: boolean } | null;
+    /** Optional viewport defaults derived from the dataset bounds. When
+     *  present, the embedding view uses these for its initial centerX /
+     *  centerY / scaler instead of running APPROX_QUANTILE+STDDEV — saves
+     *  ~5 s of cold-load time on 75 M-row GIS datasets. Unlike ``bounds``
+     *  this is never used to pack the wire payload, so quantisation stays
+     *  off. */
+    viewportHint?: {
+      centerX: number;
+      centerY: number;
+      rangeX: number;
+      rangeY: number;
+      rowCount?: number;
+      skipDeferredRefine?: boolean;
+    } | null;
   };
 
   mode?: "points" | "density";

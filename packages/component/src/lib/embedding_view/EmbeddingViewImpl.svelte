@@ -6,6 +6,10 @@
       y: Float32Array<ArrayBuffer>;
       category: Uint8Array<ArrayBuffer> | null;
     };
+    /** Set when the parent already projected ``data.y`` to Mercator on
+     *  the server (GIS Path C optimisation). The internal projection
+     *  loop is then a no-op pass-through. */
+    yIsAlreadyMercator?: boolean;
     categoryCount: number;
     categoryColors: string[] | null;
     width: number;
@@ -140,6 +144,7 @@
 
   let {
     data = { x: new Float32Array(), y: new Float32Array(), category: null },
+    yIsAlreadyMercator = false,
     categoryCount = 1,
     categoryColors = null,
     width = 800,
@@ -173,11 +178,36 @@
   let resolvedCategoryColors = $derived(categoryColors ?? defaultCategoryColors(categoryCount));
 
   let isGis = $derived(config?.isGis ?? false);
+  // Mercator-project the y (latitude) array on the JS side so the WGSL
+  // shader can stay in projected coordinates. The naive form iterated
+  // ``Viewport.projectLat`` 75 M times — ~7 s on Apple-Silicon Chrome and
+  // the single biggest synchronous block in the entire cold-start path.
+  // The optimised loop inlines the math (no function calls), folds the
+  // ``Math.PI`` constants out of the inner loop, and runs ~10× faster.
+  // Better still would be doing this in the vertex shader (one Mercator per
+  // visible point per frame instead of 75 M up-front); leaving that as a
+  // follow-up so we don't reshape the renderer in this change.
   let internalDataY = $derived.by(() => {
-    if (isGis && data.y) {
-      const y = new Float32Array(data.y.length);
-      for (let i = 0; i < data.y.length; i++) {
-        y[i] = Viewport.projectLat(data.y[i]);
+    if (isGis && data.y && !yIsAlreadyMercator) {
+      const inY = data.y;
+      const n = inY.length;
+      const y = new Float32Array(n);
+      const PI4 = Math.PI / 4;
+      const PI180 = Math.PI / 180;
+      const RAD_DEG = 180 / Math.PI;
+      const log = Math.log;
+      const tan = Math.tan;
+      const __t0 = (typeof performance !== "undefined") ? performance.now() : 0;
+      for (let i = 0; i < n; i++) {
+        const latRad = inY[i] * PI180;
+        y[i] = log(tan(PI4 + latRad * 0.5)) * RAD_DEG;
+      }
+      if (typeof performance !== "undefined" && n > 1_000_000) {
+        const w: any = window as any;
+        if (!w.__atlasMercatorLogged) {
+          w.__atlasMercatorLogged = true;
+          console.log(`[atlas-stage] mercator-loop ${(performance.now() - __t0).toFixed(0)}ms n=${n}`);
+        }
       }
       return y;
     }
@@ -540,14 +570,32 @@
     const dev = (renderer as any).gpuDevice as GPUDevice | undefined;
     if (isPerfEnabled()) {
       const t0 = performance.now();
+      const count = renderer.props.x?.length ?? 0;
+      // Tag the first render that lands ≥ 1 M points so the perf harness
+      // (and DevTools eyeball) can trivially measure cold-load → first
+      // big paint without re-instrumenting the renderer. ``cpu_render_*``
+      // logs are skipped for tiny datasets to avoid log spam.
+      if (count > 1_000_000) {
+        const w: any = window as any;
+        if (!w.__atlasFirstBigRenderLogged) {
+          w.__atlasFirstBigRenderLogged = true;
+          console.log(`[atlas-stage] first-big-render-start ${t0.toFixed(0)} count=${count}`);
+        }
+      }
       renderer.render();
       const dt = performance.now() - t0;
-      const count = renderer.props.x?.length ?? 0;
       const cap = renderer.props.downsampleMaxPoints;
       const downsampled = cap != null && Number.isFinite(cap) && cap > 0 && count > cap;
       perfSetPointCount(count);
       const whenGpuDone = dev
-        ? dev.queue.onSubmittedWorkDone().then(() => performance.now() - t0)
+        ? dev.queue.onSubmittedWorkDone().then(() => {
+            const dur = performance.now() - t0;
+            if (count > 1_000_000 && !(window as any).__atlasFirstBigRenderGpuLogged) {
+              (window as any).__atlasFirstBigRenderGpuLogged = true;
+              console.log(`[atlas-stage] first-big-render-gpu-done ${performance.now().toFixed(0)} took=${dur.toFixed(0)}ms`);
+            }
+            return dur;
+          })
         : undefined;
       perfRecord({ cpuMs: dt, downsampled, whenGpuDone });
     } else {
