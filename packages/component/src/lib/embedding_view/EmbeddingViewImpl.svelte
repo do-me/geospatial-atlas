@@ -568,38 +568,44 @@
     if (canvas.style.height !== cssH) canvas.style.height = cssH;
     const localCanvas = canvas;
     const dev = (renderer as any).gpuDevice as GPUDevice | undefined;
-    if (isPerfEnabled()) {
-      const t0 = performance.now();
-      const count = renderer.props.x?.length ?? 0;
-      // Tag the first render that lands ≥ 1 M points so the perf harness
-      // (and DevTools eyeball) can trivially measure cold-load → first
-      // big paint without re-instrumenting the renderer. ``cpu_render_*``
-      // logs are skipped for tiny datasets to avoid log spam.
-      if (count > 1_000_000) {
-        const w: any = window as any;
-        if (!w.__atlasFirstBigRenderLogged) {
-          w.__atlasFirstBigRenderLogged = true;
-          console.log(`[atlas-stage] first-big-render-start ${t0.toFixed(0)} count=${count}`);
-        }
+    const t0 = performance.now();
+    const count = renderer.props.x?.length ?? 0;
+    const perfOn = isPerfEnabled();
+    if (perfOn && count > 1_000_000) {
+      const w: any = window as any;
+      if (!w.__atlasFirstBigRenderLogged) {
+        w.__atlasFirstBigRenderLogged = true;
+        console.log(`[atlas-stage] first-big-render-start ${t0.toFixed(0)} count=${count}`);
       }
-      renderer.render();
+    }
+    renderer.render();
+    // Always-on "first GPU frame on screen" signal. The viewer's
+    // ``EmbeddingAtlas`` column-chart discovery polls
+    // ``__atlasFirstBigRenderGpuLogged`` to decide when to mount the side
+    // panel — gating it on perf mode meant the panel only appeared with
+    // ``?perf=1`` (or after a 60 s safety net). One observer per render
+    // until the flag flips, then this branch is dead.
+    if (dev && count > 0 && !((window as any).__atlasFirstBigRenderGpuLogged)) {
+      dev.queue.onSubmittedWorkDone().then(() => {
+        const w: any = window as any;
+        if (!w.__atlasFirstBigRenderGpuLogged) {
+          w.__atlasFirstBigRenderGpuLogged = true;
+          if (perfOn && count > 1_000_000) {
+            const dur = performance.now() - t0;
+            console.log(`[atlas-stage] first-big-render-gpu-done ${performance.now().toFixed(0)} took=${dur.toFixed(0)}ms`);
+          }
+        }
+      });
+    }
+    if (perfOn) {
       const dt = performance.now() - t0;
       const cap = renderer.props.downsampleMaxPoints;
       const downsampled = cap != null && Number.isFinite(cap) && cap > 0 && count > cap;
       perfSetPointCount(count);
       const whenGpuDone = dev
-        ? dev.queue.onSubmittedWorkDone().then(() => {
-            const dur = performance.now() - t0;
-            if (count > 1_000_000 && !(window as any).__atlasFirstBigRenderGpuLogged) {
-              (window as any).__atlasFirstBigRenderGpuLogged = true;
-              console.log(`[atlas-stage] first-big-render-gpu-done ${performance.now().toFixed(0)} took=${dur.toFixed(0)}ms`);
-            }
-            return dur;
-          })
+        ? dev.queue.onSubmittedWorkDone().then(() => performance.now() - t0)
         : undefined;
       perfRecord({ cpuMs: dt, downsampled, whenGpuDone });
-    } else {
-      renderer.render();
     }
     // Clear the CSS-pan transform after the GPU has finished presenting
     // the fresh frame — only then is it safe to drop the old translated
