@@ -157,8 +157,11 @@ export async function runUnpack(
   // ``CHUNK_TARGET_THREADS``-sized cmd buffers keeps each well under
   // the wall-clock budget. The shader honours
   // ``params.chunk_offset_y`` so per-thread indices land in the right
-  // slice of the destination buffer.
-  const CHUNK_TARGET_THREADS = 16_000_000;
+  // slice of the destination buffer. 8 M (was 16 M) halves per-chunk
+  // GPU time so a slow chunk under combined CPU/RAM contention still
+  // clears the 5 s ceiling — paired with the same halving on
+  // ``DRAW_CHUNK_INSTANCES`` in renderer.ts.
+  const CHUNK_TARGET_THREADS = 8_000_000;
   const workgroupsX = UNPACK_STRIDE / UNPACK_WG_SIZE;
   const workgroupsY = Math.max(1, Math.ceil(count / UNPACK_STRIDE));
   const targetWorkgroupsPerChunk = Math.max(

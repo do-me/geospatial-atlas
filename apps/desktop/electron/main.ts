@@ -482,6 +482,21 @@ if (debugPort && /^\d+$/.test(debugPort)) {
 // scatter-renderer whose whole value prop is WebGPU.
 app.commandLine.appendSwitch("enable-unsafe-webgpu");
 
+// Bump V8's old-generation heap cap on the renderer so a 322 M-row
+// scatter re-fetch doesn't trip "Array buffer allocation failed".
+// Each axis ships as a 1.29 GB Uint32Array; toArray() materialises a
+// fresh contiguous copy before the previous render's arrays are
+// released (renderer.props pins them ref-equal until the next
+// setProps microtask), so peak heap reaches ~5.8 GB during a
+// full-extent re-fetch. V8's default is ~4 GB on 64-bit Electron,
+// which is exactly the OOM we saw at 322 M. 12 GB is V8 *budget* —
+// the OS only commits pages we actually touch, so this doesn't
+// expand the renderer's resident memory; it just gives V8 the
+// allocator headroom to land the second copy. Pairs with the
+// DuckDB ``memory_limit`` cap (``fast_load.py``) that keeps the
+// sidecar from contesting RAM with the renderer.
+app.commandLine.appendSwitch("js-flags", "--max-old-space-size=12288");
+
 // Single-instance: subsequent launches focus the existing window and
 // forward the dataset arg.
 const gotLock = app.requestSingleInstanceLock();

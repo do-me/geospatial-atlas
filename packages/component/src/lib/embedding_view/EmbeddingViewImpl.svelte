@@ -280,6 +280,44 @@
     }, 150);
   }
 
+  // Wheel-zoom suppression. Mid-wheel, every tick changes ``scale`` —
+  // and at 322 M points each render is 25-90 s, so a continuous scroll
+  // queues N stale renders that the user will never see anyway. Hide
+  // the canvas the instant a wheel tick fires, suppress every render
+  // until 500 ms after the last tick, then reveal the canvas and let
+  // the reactive system fire ONE render at the final zoom level.
+  // ``viewportState`` keeps updating throughout the gesture so when
+  // we un-suppress, ``$effect.pre`` sees the final scale and renders
+  // exactly once.
+  let isWheeling = $state(false);
+  let wheelEndTimer: ReturnType<typeof setTimeout> | null = null;
+  const WHEEL_END_DEBOUNCE_MS = 500;
+  function bumpWheel() {
+    if (!isWheeling) {
+      isWheeling = true;
+      // Hide the canvas instantly. CSS opacity is the lightest hammer:
+      // it doesn't change layout, it leaves the WebGPU swap-chain
+      // texture intact, and the GPU compositor short-circuits the
+      // composited frame contribution. visibility:hidden would also
+      // disable hit-testing on overlapping SVG handlers, which we
+      // still want active for the wheel handler to keep capturing.
+      if (canvas) canvas.style.opacity = "0";
+    }
+    if (wheelEndTimer != null) clearTimeout(wheelEndTimer);
+    wheelEndTimer = setTimeout(() => {
+      isWheeling = false;
+      wheelEndTimer = null;
+      if (canvas) canvas.style.opacity = "";
+      // Force the reactive render path. ``$effect.pre`` re-runs because
+      // ``isWheeling`` is read inside it, but the renderer's own
+      // ``setProps`` change-detection may decide nothing changed if
+      // we suppressed only one render in the gesture (rare). Calling
+      // setNeedsRender explicitly guarantees the gesture's final
+      // viewport actually paints.
+      setNeedsRender();
+    }, WHEEL_END_DEBOUNCE_MS);
+  }
+
   function compareSelection(a: Selection, b: Selection) {
     return a.x == b.x && a.y == b.y && a.category == b.category && a.text == b.text;
   }
@@ -487,6 +525,18 @@
   }
 
   $effect.pre(() => {
+    // Wheel-zoom suppression: mid-gesture, every tick changes scale
+    // and would otherwise queue a 25-90 s render at 322 M points. We
+    // hide the canvas in ``bumpWheel`` and short-circuit here. The
+    // 500 ms wheel-end timer flips ``isWheeling`` false and triggers
+    // setNeedsRender so a SINGLE render fires at the final zoom.
+    // Note: read isWheeling INSIDE the effect so Svelte's reactivity
+    // re-runs us when the flag flips back to false. ``viewportState``
+    // continues to update during the gesture, so the post-flip render
+    // sees the final scale + position.
+    if (isWheeling) {
+      return;
+    }
     // CSS-pan fast path: mid-gesture, scale unchanged, and the canvas
     // bitmap still covers the viewport. Zero GPU work — the user's
     // insight that "if I'm only panning, the points are already there".
@@ -1004,6 +1054,7 @@
   function onWheel(e: WheelEvent) {
     e.preventDefault();
     bumpInteraction();
+    bumpWheel();
     let { x, y } = localCoordinates(e);
     let scaler = Math.exp(-e.deltaY / 200);
     onZoom(scaler, { x, y });

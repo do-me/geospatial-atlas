@@ -59,9 +59,15 @@ def _safe_memory_temp_settings() -> tuple[str, str]:
         total_ram = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
     except (ValueError, OSError, AttributeError):
         total_ram = 16 * 1024**3  # conservative fallback (16 GiB)
-    # 50 % of system RAM, capped at 64 GiB. Leaves headroom for the
-    # parquet reader, FastAPI workers, the OS file cache, and the
-    # ALTER+UPDATE pass the viewer triggers on every "color by" click.
+    # 50 % of system RAM, hard-capped at 64 GiB. The renderer process,
+    # macOS, and any browsers the user is running need the other half —
+    # a 96 GiB cap on a 128 GiB box once consumed enough swap that
+    # macOS triggered "system has run out of application memory" and
+    # took down the desktop. DuckDB *will* spill when it hits the cap,
+    # which is fine: the 86 GiB of /var temp seen previously was
+    # orphan from prior crashes (purged separately), not a sign that
+    # the limit was too low. Disk-spill at 64 GiB with adequate free
+    # disk is healthy behavior; growing past 64 GiB is not.
     limit_bytes = min(int(total_ram * 0.5), 64 * 1024**3)
     limit_str = f"{limit_bytes // (1024**3)}GB"
     # OS tmp dir always exists and has plenty of room; per-process subdir

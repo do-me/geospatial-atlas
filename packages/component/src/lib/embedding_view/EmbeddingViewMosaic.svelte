@@ -278,6 +278,25 @@
           const t0 = performance.now();
           const numRowsHint = (data && typeof data.numRows === "number") ? data.numRows : -1;
           console.info(`[atlas-stage] scatter-queryResult arrived numRows=${numRowsHint} at ${t0.toFixed(0)}`);
+          // Drop the previous batch's heap refs BEFORE allocating the next.
+          // Each ``getChild().toArray()`` materialises a fresh contiguous
+          // buffer (DuckDB emits multi-chunk Arrow at this size, so toArray
+          // memcpy-concatenates into a new ArrayBuffer). At 322 M rows that
+          // is two 1.29 GB Uint32Arrays + a 322 MB Uint8Array. If the
+          // previous batch's arrays are still anchored in the renderer
+          // signals, peak heap doubles to ~5.8 GB — which trips V8's
+          // ArrayBuffer allocator on zoom-out (full-extent re-fetch). Svelte
+          // 5 ``$state.raw`` writes batch within a synchronous block, so
+          // these intermediate nulls never reach the renderer's effect; it
+          // only re-derives once we yield with the new arrays settled
+          // below. ``$effect.pre`` already gates on ``isWheeling`` so even
+          // if the flush *did* land mid-toArray, the canvas would stay
+          // suppressed.
+          xPackedData = null;
+          yPackedData = null;
+          xData = EMPTY_F32;
+          yData = EMPTY_F32;
+          categoryData = null;
           let xArray, yArray, categoryArray;
           try {
             xArray = data.getChild("x").toArray();
@@ -333,15 +352,6 @@
             categoryArray = new Uint8Array(categoryArray);
           }
           const t2 = performance.now();
-          // Drop prior buffers FIRST so the GC can reclaim them before
-          // we settle into the new ones — without this, on the second
-          // queryResult fire (Mosaic re-emits when filters rebind) the
-          // old + new arrays both stay live for the duration of this
-          // callback, doubling peak heap.
-          xPackedData = null;
-          yPackedData = null;
-          xData = EMPTY_F32;
-          yData = EMPTY_F32;
           xPackedData = nextXPacked;
           yPackedData = nextYPacked;
           coordsBoundsX = nextBoundsX;

@@ -760,18 +760,22 @@ function makeRenderCommand(
           // attachments — subsequent chunks ``load`` and additively
           // blend onto the partial buffer.
           //
-          // 2 M instances was chosen empirically: 16 M tripped Metal's
-          // 5 s per-buffer timeout at world zoom on the 322 M eubucco
-          // dataset; 4 M survived initial render but a follow-up pan
-          // re-render still hit a single-chunk timeout (suspected: a
-          // transient paging slowdown under 10+ GB GPU pressure
-          // pushed one cmd buffer past 5 s). 2 M leaves ~16× headroom
-          // — even a 5× slowdown on any one chunk stays under the
-          // ceiling — at the cost of 161 chunks at 322 M (~25 s
-          // initial wall on Apple GPU). Pan re-renders at
-          // country/city zoom early-exit most VS runs in the bounds
-          // check and complete in a few s regardless of chunk count.
-          const DRAW_CHUNK_INSTANCES = 2_000_000;
+          // 1 M instances chosen empirically: 16 M / 4 M / 2 M each
+          // tripped Metal's 5 s watchdog at 322 M when the renderer
+          // shared the box with a heavyweight sidecar (DuckDB at
+          // 50 + GB) and a parallel column-chart-discovery batch
+          // pushed one cmd buffer past 5 s of GPU wall. 2 M nominally
+          // had 16× headroom but it was not enough under combined
+          // CPU/RAM/GPU contention: a single dense world-view chunk
+          // could see fragment overdraw + paging slowdowns multiply
+          // execution time well beyond the empirical mean. 1 M doubles
+          // headroom (32×) at the cost of 322 chunks at 322 M; encoder
+          // setup is microseconds-per-chunk so this adds ~ tens of ms
+          // of CPU overhead — invisible against the multi-second GPU
+          // wall it protects. Pan re-renders at country/city zoom
+          // still early-exit most VS runs via the bounds check and
+          // complete in a few s regardless of chunk count.
+          const DRAW_CHUNK_INSTANCES = 1_000_000;
           const totalChunks = count > 0 ? Math.max(1, Math.ceil(count / DRAW_CHUNK_INSTANCES)) : 1;
           if (count > 0) {
             for (let chunk = 0; chunk < totalChunks; chunk++) {
