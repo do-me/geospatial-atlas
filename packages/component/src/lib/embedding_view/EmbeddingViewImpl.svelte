@@ -355,13 +355,36 @@
       ? perfOverrides.downsampleMaxPointsInteractive
       : config?.downsampleMaxPointsInteractive ?? 200_000,
   );
-  let effectiveDownsampleMaxPoints = $derived(
-    isInteracting &&
+  let effectiveDownsampleMaxPoints = $derived.by(() => {
+    // Once we have an initial frame, ``skipDownsampleCompute`` is true
+    // during interaction — the compute pass is skipped and the renderer
+    // reuses the previously compacted indices via ``drawIndirect``. In
+    // that mode the GPU draws exactly the instance count baked into
+    // ``indirectArgsBuffer`` from the LAST full render. Shrinking
+    // ``downsampleMaxPoints`` here would shrink ``compactIndicesBuffer``
+    // (its size is derived from ``maxPoints``), but ``indirectArgsBuffer``
+    // would still carry the old high count — ``points_compacted_vs`` then
+    // reads compact_indices[0..oldCount] from the now-smaller buffer,
+    // overflows it, and trips the macOS GPU watchdog
+    // (``kIOGPUCommandBufferCallbackErrorTimeout``). That cascade was the
+    // root cause of the 322 M-row world-view crash on rapid pan/zoom.
+    //
+    // Skipping the compute pass already makes mid-gesture frames cheap
+    // (drawIndirect over the prior compact set is ~2-3 ms), so the
+    // interactive cap buys us nothing — keep the buffer at its full
+    // allocated size for the entire gesture lifetime.
+    if (
+      isInteracting &&
       downsampleMaxPointsInteractive != null &&
       Number.isFinite(downsampleMaxPointsInteractive)
-      ? Math.min(downsampleMaxPoints, downsampleMaxPointsInteractive as number)
-      : downsampleMaxPoints,
-  );
+    ) {
+      if (hasInitialFrame) {
+        return downsampleMaxPoints;
+      }
+      return Math.min(downsampleMaxPoints, downsampleMaxPointsInteractive as number);
+    }
+    return downsampleMaxPoints;
+  });
   let effectiveDownsampleDensityWeight = $derived.by(() => {
     // Density weighting buys nothing while the user is dragging — the
     // renderer otherwise pays for accumulate + blur over all 75M points
@@ -662,7 +685,7 @@
         _renderInFlight = false;
         if (reason === "watchdog") {
           console.warn(
-            "[atlas] render backpressure watchdog fired — onSubmittedWorkDone() did not settle in 30 s. Likely device.lost or GPU process hang; force-resetting so subsequent renders can proceed.",
+            "[atlas] render backpressure watchdog fired — onSubmittedWorkDone() did not settle in 300 s. Likely device.lost or GPU process hang; force-resetting so subsequent renders can proceed.",
           );
         }
         if (_renderPending) {
@@ -670,7 +693,20 @@
           setNeedsRender();
         }
       };
-      const watchdog = setTimeout(() => finish("watchdog"), 30_000);
+      // 300 s (5 min) budget. The no-cap path draws every one of the
+      // 322 M eubucco points by chunking the instance draw into 81 ×
+      // 4 M-instance cmd buffers. Each cmd buffer is sized to fit
+      // Metal's 5 s per-buffer watchdog (~0.6 s wall on Apple GPU at
+      // world zoom). Total wall-clock for the whole render is
+      // typically 25-90 s, but a contended GPU process or a slow
+      // tail-pass can stretch it. The original 30 s budget assumed
+      // downsampled drawIndirect (~1 s); 120 s was a halfway bump.
+      // 5 min keeps us comfortably above any realistic worst case
+      // while still catching genuine device.lost / GPU-process hangs.
+      // Premature reset is the trigger for cascading kIOGPU timeouts:
+      // it queues a *second* render on top of the in-flight first
+      // one, doubling cmd-buffer load past the Metal 5 s ceiling.
+      const watchdog = setTimeout(() => finish("watchdog"), 300_000);
       dev.queue.onSubmittedWorkDone().then(
         () => finish("drain"),
         () => finish("rejected"),

@@ -136,7 +136,29 @@ export async function defaultColumnCharts(options: {
     if (config.override?.[item.name] !== undefined) return false;
     return true;
   });
-  let distinctMap = await distinctCountBatch(coordinator, table, candidates.map((c) => c.name));
+  // Race the wide ``APPROX_COUNT_DISTINCT`` batch against a 15 s
+  // timeout. On 322 M-row × 30+-col tables the batch can take 60 s+ —
+  // long enough that the side panel never populates and the user
+  // (correctly) thinks the app is broken. On timeout we fall back to
+  // an empty distinct map: number/Date columns get histograms (which
+  // don't need cardinality), string columns get count-plots clamped
+  // by the existing distinct-count guard, and the panel appears even
+  // if a few low-cardinality string columns get skipped.
+  let distinctMap: Map<string, number>;
+  try {
+    distinctMap = await Promise.race([
+      distinctCountBatch(coordinator, table, candidates.map((c) => c.name)),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("distinctCountBatch timeout (15 s) — falling back to heuristics")),
+          15_000,
+        ),
+      ),
+    ]);
+  } catch (err) {
+    console.warn(`[atlas-charts] ${(err as Error).message}`);
+    distinctMap = new Map();
+  }
 
   for (let item of columns) {
     if (item.jsType == null) {
@@ -161,15 +183,27 @@ export async function defaultColumnCharts(options: {
       continue;
     }
 
-    let distinct = distinctMap.get(item.name) ?? 2;
-    // Skip the column if there's only a single unique value.
-    if (distinct <= 1) {
+    let distinctRaw = distinctMap.get(item.name);
+    // ``distinct`` UNKNOWN (timeout fallback) is meaningfully different
+    // from "distinct == 2" — for unknown we should be conservative.
+    // Default unknowns to a high value so we never build a count-plot
+    // for a potentially-high-cardinality string column (which would
+    // try to render thousands of bars and freeze layout).
+    let distinct = distinctRaw ?? Number.POSITIVE_INFINITY;
+    let distinctKnown = distinctRaw !== undefined;
+    // Skip the column if there's only a single unique value (only
+    // when we actually measured it).
+    if (distinctKnown && distinct <= 1) {
       continue;
     }
 
     switch (item.jsType) {
       case "string": {
-        if (distinct <= 1000) {
+        // count-plot is only safe when we KNOW the cardinality is
+        // bounded. On the timeout fallback path we skip strings
+        // entirely rather than guess — better an empty entry than a
+        // 322 M-row count-plot that hangs the renderer.
+        if (distinctKnown && distinct <= 1000) {
           charts.push({
             type: "count-plot",
             title: item.name,
@@ -188,7 +222,7 @@ export async function defaultColumnCharts(options: {
       }
       case "number":
       case "Date": {
-        if (distinct <= 10) {
+        if (distinctKnown && distinct <= 10) {
           charts.push({
             type: "count-plot",
             title: item.name,

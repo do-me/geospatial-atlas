@@ -173,7 +173,7 @@ export function makeDownsampleCommand(
   group1: Node<GPUBindGroup>,
   downsampleResources: DownsampleResources,
   dataBuffers: DataBuffers,
-): Node<(encoder: GPUCommandEncoder, config: DownsampleConfig) => void> {
+): Node<(config: DownsampleConfig) => void> {
   // Create a minimal bind group layout for blur_buffer (just 1 storage buffer)
   // This keeps viewport_cull under the 8 storage buffer limit:
   // group1 (3) + blurOnly (1) + group3 (4) = 8
@@ -264,12 +264,9 @@ export function makeDownsampleCommand(
       indirectArgsBuffer,
       count,
     ) =>
-      (encoder, config) => {
+      (config) => {
         // Reset indirect args first so every early-exit path (count=0,
-        // maxPoints=0) still clears the draw count. Leaving them unset
-        // caused drawPointsCompacted to replay the previous compute's
-        // accepted count, which made maxPoints=0 render the prior frame's
-        // points instead of zero.
+        // maxPoints=0) still clears the draw count.
         const initIndirect = new Uint32Array([4, 0, 0, 0]);
         device.queue.writeBuffer(indirectArgsBuffer, 0, initIndirect);
 
@@ -277,68 +274,95 @@ export function makeDownsampleCommand(
           return 0;
         }
 
-        // Update uniform buffer
-        const uniformData = new ArrayBuffer(16);
-        const uniformView = new DataView(uniformData);
-        uniformView.setUint32(0, config.maxPoints, true);
-        uniformView.setUint32(4, config.frameSeed, true);
-        uniformView.setFloat32(8, config.densityWeight, true);
-        uniformView.setFloat32(12, 0, true); // padding
-        device.queue.writeBuffer(uniformBuffer, 0, uniformData);
-
-        // Clear counters
-        encoder.clearBuffer(countersBuffer);
-
-        // All three downsample passes share the same stride; pick any
-        // wg size (they're bound by downsampleCull here — the shader
-        // strides match across passes).
         const [workgroupsX, workgroupsY] = computeDispatch(
           count,
           wgConfig.downsampleCull,
           wgConfig.downsampleStride,
         );
 
-        // Pass 1: Viewport culling + density lookup (needs blur_buffer for density)
-        // Pipeline layout: [group0, group1, blurOnly, group3]
-        {
-          const pass = encoder.beginComputePass();
-          pass.setPipeline(viewportCullPipeline);
-          pass.setBindGroup(0, group0);
-          pass.setBindGroup(1, group1);
-          pass.setBindGroup(2, group2Blur);
-          pass.setBindGroup(3, group3);
-          pass.dispatchWorkgroups(workgroupsX, workgroupsY);
-          pass.end();
-        }
+        // Chunked dispatch: each compute pass is split into K
+        // command-buffer-sized chunks of (workgroupsX, ~workgroupsY/K)
+        // each. K is sized so each chunk dispatches roughly
+        // ``CHUNK_TARGET_THREADS`` (currently 64M) — well under Metal's
+        // 5 s wall-clock MTLCommandBuffer watchdog regardless of N.
+        //
+        // Why not one cmd-buffer per pass: at 322 M total points (eubucco)
+        // a single viewport_cull pass alone exceeded 5 s and tripped
+        // ``kIOGPUCommandBufferCallbackErrorTimeout``. The poison
+        // cascade of ``kIOGPUCommandBufferCallbackErrorSubmissionsIgnored``
+        // then killed the renderer. Workgroup-local atomic reduction
+        // (see program.wgsl ``wg_cull_visible``) collapsed the global
+        // atomic hotspot but per-thread compute + memory bandwidth
+        // were still O(N), so the watchdog still fired at world-zoom
+        // (~322 M visible).
+        //
+        // The shader honours ``downsample_uniforms.chunk_offset_y`` —
+        // each thread's effective index becomes
+        // ``(id.y + chunk_offset_y) * DOWNSAMPLE_STRIDE + id.x``.
+        // Re-writing the uniform between submits is properly sequenced
+        // by the WebGPU queue (``writeBuffer`` is queued and runs in
+        // submission order with respect to the cmd buffers it
+        // sandwiches).
+        const CHUNK_TARGET_THREADS = 16_000_000;
+        const threadsPerWorkgroupY = workgroupsX * wgConfig.downsampleCull;
+        const targetWorkgroupsPerChunk = Math.max(
+          1,
+          Math.floor(CHUNK_TARGET_THREADS / threadsPerWorkgroupY),
+        );
+        const numChunks = Math.max(1, Math.ceil(workgroupsY / targetWorkgroupsPerChunk));
+        const chunkSizeY = Math.ceil(workgroupsY / numChunks);
 
-        // Pass 2: Probabilistic acceptance based on density
-        // Pipeline layout: [group0, group1, empty, group3]
-        {
-          const pass = encoder.beginComputePass();
-          pass.setPipeline(densitySamplePipeline);
-          pass.setBindGroup(0, group0);
-          pass.setBindGroup(1, group1);
-          pass.setBindGroup(2, emptyGroup);
-          pass.setBindGroup(3, group3);
-          pass.dispatchWorkgroups(workgroupsX, workgroupsY);
-          pass.end();
-        }
+        const writeUniform = (chunkOffsetY: number) => {
+          const uniformData = new ArrayBuffer(16);
+          const uniformView = new DataView(uniformData);
+          uniformView.setUint32(0, config.maxPoints, true);
+          uniformView.setUint32(4, config.frameSeed, true);
+          uniformView.setFloat32(8, config.densityWeight, true);
+          uniformView.setUint32(12, chunkOffsetY, true);
+          device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+        };
 
-        // Pass 3: Compaction. Reads point_data, writes accepted indices to
-        // compact_indices, and increments indirect_args[1] (instanceCount).
-        // The followup drawIndirect then iterates only accepted instances —
-        // the whole point of this pipeline. Disabling this pass makes the
-        // downstream draw fall back to an instanceCount of 0 (no points).
-        {
-          const pass = encoder.beginComputePass();
-          pass.setPipeline(compactPipeline);
-          pass.setBindGroup(0, group0);
-          pass.setBindGroup(1, group1);
-          pass.setBindGroup(2, emptyGroup);
-          pass.setBindGroup(3, group3);
-          pass.dispatchWorkgroups(workgroupsX, workgroupsY);
-          pass.end();
+        const dispatchPass = (
+          pipeline: GPUComputePipeline,
+          group2: GPUBindGroup,
+          isFirstSubmit: boolean,
+        ) => {
+          for (let chunk = 0; chunk < numChunks; chunk++) {
+            const offsetY = chunk * chunkSizeY;
+            const remaining = Math.min(chunkSizeY, workgroupsY - offsetY);
+            if (remaining <= 0) break;
+
+            writeUniform(offsetY);
+            const enc = device.createCommandEncoder();
+            // Counter reset must land in the FIRST cmd buffer of the
+            // FIRST pass (viewport_cull) — every subsequent pass reads
+            // the totals; chunked viewport_cull shares a single visible
+            // count across all its chunks because they all atomicAdd
+            // into the same counter.
+            if (isFirstSubmit && chunk === 0) {
+              enc.clearBuffer(countersBuffer);
+            }
+            const pass = enc.beginComputePass();
+            pass.setPipeline(pipeline);
+            pass.setBindGroup(0, group0);
+            pass.setBindGroup(1, group1);
+            pass.setBindGroup(2, group2);
+            pass.setBindGroup(3, group3);
+            pass.dispatchWorkgroups(workgroupsX, remaining);
+            pass.end();
+            device.queue.submit([enc.finish()]);
+          }
+        };
+
+        if (!(globalThis as any).__atlasDownsampleDiagLogged) {
+          (globalThis as any).__atlasDownsampleDiagLogged = true;
+          console.log(
+            `[atlas-downsample-diag] count=${count} workgroupsX=${workgroupsX} workgroupsY=${workgroupsY} chunkSizeY=${chunkSizeY} numChunks=${numChunks} (${numChunks * 3} cmd-bufs total)`,
+          );
         }
+        dispatchPass(viewportCullPipeline, group2Blur, true);
+        dispatchPass(densitySamplePipeline, emptyGroup, false);
+        dispatchPass(compactPipeline, emptyGroup, false);
       },
   );
 }

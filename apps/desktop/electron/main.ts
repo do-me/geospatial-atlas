@@ -406,6 +406,39 @@ function createWindow() {
     mainWindow = null;
     killRunning();
   });
+
+  // ---- crash + console observability ----
+  // The packaged app silently absorbs renderer console messages and
+  // renderer-process deaths, so when WebGPU exhausts the Metal watchdog
+  // or the renderer OOMs there is no visible signal at all. These hooks
+  // forward everything to the main-process stdout/stderr (which the
+  // desktop-electron-real-pan.spec.ts harness captures via Playwright's
+  // _electron API). The user can also tail them by launching from a
+  // terminal: ``Geospatial\ Atlas.app/Contents/MacOS/Geospatial\ Atlas``.
+  const wc = mainWindow.webContents;
+  wc.on("console-message", (_e, level, message, line, src) => {
+    const tag = ["v", "i", "w", "e"][level] ?? "?";
+    process.stdout.write(`[renderer-console][${tag}] ${src || "?"}:${line}: ${message}\n`);
+  });
+  wc.on("render-process-gone", (_e, details) => {
+    const line = `[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}\n`;
+    process.stdout.write(line);
+    process.stderr.write(line);
+  });
+  wc.on("unresponsive", () => {
+    process.stdout.write(`[renderer-unresponsive]\n`);
+  });
+  wc.on("responsive", () => {
+    process.stdout.write(`[renderer-responsive]\n`);
+  });
+  wc.on("did-fail-load", (_e, errorCode, errorDescription, url) => {
+    process.stdout.write(
+      `[renderer-load-fail] code=${errorCode} desc=${errorDescription} url=${url}\n`,
+    );
+  });
+  wc.on("preload-error", (_e, preloadPath, error) => {
+    process.stdout.write(`[preload-error] path=${preloadPath} ${error.message}\n`);
+  });
 }
 
 // Pin the userData directory to the bundle identifier so per-dataset
@@ -427,6 +460,19 @@ if (process.platform === "linux") {
 // Force the discrete GPU on multi-GPU macOS systems (big perf win for
 // WebGPU/WebGL scatter rendering on MBPs with integrated + discrete).
 app.commandLine.appendSwitch("force-high-performance-gpu");
+
+// Optional: enable Chrome DevTools Protocol over a TCP port so an
+// external harness (Playwright via chromium.connectOverCDP, or a
+// browser at http://localhost:<port>) can attach. Off by default —
+// only opens when ``GEOSPATIAL_ATLAS_DEBUG_PORT`` is set, which the
+// e2e/desktop-electron-real-pan.spec.ts harness sets to expose
+// renderer-side metrics, network, and JS heap during pan storms.
+const debugPort = process.env["GEOSPATIAL_ATLAS_DEBUG_PORT"];
+if (debugPort && /^\d+$/.test(debugPort)) {
+  app.commandLine.appendSwitch("remote-debugging-port", debugPort);
+  app.commandLine.appendSwitch("remote-allow-origins", "*");
+  process.stdout.write(`[debug] CDP listening on port ${debugPort}\n`);
+}
 // Chromium blocklists WebGPU on a range of older NVIDIA and Intel GPUs that
 // are nonetheless perfectly capable of running Dawn on D3D12 (e.g. GeForce
 // MX150, Intel UHD 620). `--enable-unsafe-webgpu` bypasses that blocklist.
@@ -450,6 +496,48 @@ if (!gotLock) {
       if (dataset) void handleDroppedFile(dataset);
     }
   });
+
+  // App-wide crash hooks. ``child-process-gone`` fires for the GPU
+  // process / utility processes, etc.; ``gpu-info-update`` fires when
+  // Chromium's GPU info changes (which it does on a Metal device-lost,
+  // because the GPU process re-initialises). Forward both so the test
+  // harness sees the SAME signals a real "system almost crashed" looks
+  // like at the OS level.
+  app.on("child-process-gone", (_e, details) => {
+    const line = `[child-gone] type=${details.type} reason=${details.reason} exitCode=${details.exitCode} name=${details.name ?? ""}\n`;
+    process.stdout.write(line);
+    process.stderr.write(line);
+  });
+  app.on("gpu-info-update", () => {
+    process.stdout.write(`[gpu-info-update]\n`);
+  });
+  // Optional periodic CPU/RAM dump for every Electron process. Off by
+  // default; the e2e harness enables it via env var so we can correlate
+  // a "system almost crashed" report with which process actually
+  // ballooned (renderer? GPU? sidecar started by Electron? duckdb?).
+  const metricsMs = Number(process.env["GEOSPATIAL_ATLAS_METRICS_INTERVAL"] ?? "0");
+  if (Number.isFinite(metricsMs) && metricsMs > 0) {
+    setInterval(() => {
+      try {
+        const m = app.getAppMetrics();
+        const cumCpu = m.reduce((s, p) => s + (p.cpu?.percentCPUUsage ?? 0), 0);
+        const cumRssMib = Math.round(
+          m.reduce((s, p) => s + (p.memory?.workingSetSize ?? 0), 0) / 1024,
+        );
+        const detail = m
+          .map(
+            (p) =>
+              `${p.type}${p.serviceName ? ":" + p.serviceName : ""}=${(p.cpu?.percentCPUUsage ?? 0).toFixed(1)}%/${Math.round((p.memory?.workingSetSize ?? 0) / 1024)}MiB`,
+          )
+          .join(" ");
+        process.stdout.write(
+          `[metrics] cumCpu=${cumCpu.toFixed(1)}% cumRssMiB=${cumRssMib} ${detail}\n`,
+        );
+      } catch (e) {
+        process.stdout.write(`[metrics-err] ${(e as Error).message}\n`);
+      }
+    }, metricsMs);
+  }
 
   app.whenReady().then(() => {
     registerIpcHandlers();

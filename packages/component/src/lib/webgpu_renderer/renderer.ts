@@ -675,82 +675,133 @@ function makeRenderCommand(
           category_colors: categoryColors,
         });
 
-        let encoder = device.createCommandEncoder();
-
         // Check if downsampling is enabled
         // Normalize the maxPoints value: null, Infinity, NaN, or negative disable downsampling.
         // 0 is a valid request to render zero points (flows through the compacted path,
         // which resets indirect args and draws no instances).
         const maxPoints = props.downsampleMaxPoints;
-        const effectiveMaxPoints =
+        const userMaxPoints =
           maxPoints === null || maxPoints === Infinity || !Number.isFinite(maxPoints) || maxPoints < 0
             ? null
             : maxPoints;
+        // ``"All"`` (userMaxPoints == null) MUST draw every point, no
+        // matter how large N is — sampling silently drops sparse regions
+        // (a 322 M Europe-wide dataset rendered with a 50 M density cap
+        // showed only Germany/Austria/CZ/Finland; UK/France/Spain/Italy
+        // got dropped because density_sample favoured the densest areas).
+        // The chunked drawPoints path below splits the instance draw
+        // into 16 M-sized cmd buffers so each fits Metal's 5 s wall-clock
+        // watchdog, and ``onSubmittedWorkDone`` is awaited per submit so
+        // the 30 s backpressure timeout never trips. Cold init + each
+        // pan re-render both go through this path; users explicitly
+        // accept the longer per-frame budget in exchange for a complete
+        // map.
+        const effectiveMaxPoints = userMaxPoints;
         const useDownsampling = effectiveMaxPoints !== null && count > effectiveMaxPoints;
 
+        if (count > 1_000_000 && !((globalThis as any).__atlasRenderDiagLogged)) {
+          (globalThis as any).__atlasRenderDiagLogged = true;
+          console.log(
+            `[atlas-renderdiag] count=${count} useDownsampling=${useDownsampling} effectiveMaxPoints=${effectiveMaxPoints} mode=${props.mode} densityWeight=${props.downsampleDensityWeight} skipDownsample=${props.skipDownsampleCompute} usePacked=${props.xPacked != null}`,
+          );
+        }
+
         if (useDownsampling) {
-          // The accumulate + blur passes touch every input point with atomic
-          // adds against the density grid — at 75M points this dominates the
-          // frame. They are only required if the downsample shader actually
-          // reads density to bias sampling (densityWeight > 0) OR if we're
-          // about to draw the density overlay. When density weighting is off
-          // we can skip them entirely; downsample falls back to uniform random
-          // sampling because (a) downsampleConfig.densityWeight = 0 cancels
-          // the inverse-weight term and (b) blur_buffer's stale contents only
-          // ever feed that term, so they don't matter.
           const wantsDensityOverlay =
             props.mode == "density" && (props.densityAlpha > 0 || props.contoursAlpha > 0);
           const wantsDensityWeighting = props.downsampleDensityWeight > 0;
+
+          // accumulate + blur populate ``blur_buffer`` which the
+          // ``downsample_viewport_cull`` pass then reads to weight per-point
+          // acceptance. Because ``downsample`` now submits its own command
+          // buffers directly (per-pass + per-chunk to stay under Metal's
+          // 5 s wall-clock watchdog at 322 M points), we must finish + submit
+          // the accumulate/blur encoder BEFORE the first downsample submit —
+          // otherwise the cull pass races on a stale (zero on first frame)
+          // ``blur_buffer``, every point sees density ≈ 0, and the
+          // probabilistic acceptance produces a visually empty scatter.
           if (wantsDensityWeighting || wantsDensityOverlay) {
-            accumulate(encoder);
-            gaussianBlur(encoder);
+            const preEncoder = device.createCommandEncoder();
+            accumulate(preEncoder);
+            gaussianBlur(preEncoder);
+            device.queue.submit([preEncoder.finish()]);
           }
 
-          // Run downsampling pipeline with fixed seed for deterministic sampling
-          // Using 42 ensures the same points are always accepted/rejected
-          // Viewport culling handles which points are visible
           const downsampleConfig: DownsampleConfig = {
             maxPoints: effectiveMaxPoints!,
             densityWeight: wantsDensityWeighting ? props.downsampleDensityWeight : 0,
             frameSeed: 42,
           };
 
-          // Perform downsample. This now also runs the compact_accepted pass
-          // which populates compact_indices + indirect_args[1] so the
-          // followup drawPointsCompacted only iterates accepted instances.
-          // When skipDownsampleCompute is set we skip the entire compute
-          // chain and reuse the previous frame's compact_indices — the
-          // updated viewport matrix uniform still reprojects them. Used
-          // during pan to drop ~16ms of compute floor per frame.
+          // ``downsample`` internally submits 3 passes × ~K chunks (typically
+          // 3 × 5 = 15 cmd buffers at 322 M) so each one stays under the Metal
+          // watchdog. WebGPU queue ordering keeps the cull → sample → compact
+          // → drawIndirect dependency chain intact across the separate submits.
           if (!props.skipDownsampleCompute) {
-            downsample(encoder, downsampleConfig);
+            downsample(downsampleConfig);
           }
 
-          // Draw accepted points via indirect draw — vertex shader runs
-          // for ~maxPoints instances instead of `count`. This collapses the
-          // 75M-instance vertex iteration that capped frame time at ~89ms
-          // even when nearly every instance was rejected by density_sample.
-          drawPointsCompacted(encoder);
-
-          // If in density mode, also draw density overlay (using all points, already computed)
+          const drawEncoder = device.createCommandEncoder();
+          drawPointsCompacted(drawEncoder);
           if (wantsDensityOverlay) {
-            drawDensityMap(encoder);
+            drawDensityMap(drawEncoder);
           }
+          gammaCorrection(drawEncoder, textureView);
+          device.queue.submit([drawEncoder.finish()]);
         } else {
-          // No downsampling needed - use original path
-          drawPoints(encoder);
+          // Chunked instance draw. ``pass.draw(4, count)`` for the
+          // ``downsampleMaxPoints = "All"`` case at 322 M instances tries
+          // to push 1.3 B vertex shader runs through one MTLCommandBuffer
+          // — easily exceeds Metal's 5 s wall-clock watchdog and
+          // ``onSubmittedWorkDone()`` never resolves. Splitting the draw
+          // into ``DRAW_CHUNK_INSTANCES``-sized cmd buffers keeps every
+          // cmd buffer under the watchdog while still drawing every
+          // point. Only the first chunk clears the color/alpha
+          // attachments — subsequent chunks ``load`` and additively
+          // blend onto the partial buffer.
+          //
+          // 2 M instances was chosen empirically: 16 M tripped Metal's
+          // 5 s per-buffer timeout at world zoom on the 322 M eubucco
+          // dataset; 4 M survived initial render but a follow-up pan
+          // re-render still hit a single-chunk timeout (suspected: a
+          // transient paging slowdown under 10+ GB GPU pressure
+          // pushed one cmd buffer past 5 s). 2 M leaves ~16× headroom
+          // — even a 5× slowdown on any one chunk stays under the
+          // ceiling — at the cost of 161 chunks at 322 M (~25 s
+          // initial wall on Apple GPU). Pan re-renders at
+          // country/city zoom early-exit most VS runs in the bounds
+          // check and complete in a few s regardless of chunk count.
+          const DRAW_CHUNK_INSTANCES = 2_000_000;
+          const totalChunks = count > 0 ? Math.max(1, Math.ceil(count / DRAW_CHUNK_INSTANCES)) : 1;
+          if (count > 0) {
+            for (let chunk = 0; chunk < totalChunks; chunk++) {
+              const instanceFirst = chunk * DRAW_CHUNK_INSTANCES;
+              const instanceCount = Math.min(DRAW_CHUNK_INSTANCES, count - instanceFirst);
+              if (instanceCount <= 0) break;
+              const enc = device.createCommandEncoder();
+              drawPoints(enc, instanceFirst, instanceCount, chunk === 0);
+              device.queue.submit([enc.finish()]);
+            }
+          } else {
+            // Even at count==0 we still need a single render pass to
+            // clear the colour attachment so the gamma stage doesn't
+            // sample stale contents.
+            const enc = device.createCommandEncoder();
+            drawPoints(enc, 0, 0, true);
+            device.queue.submit([enc.finish()]);
+          }
 
+          const tailEncoder = device.createCommandEncoder();
           if (props.mode == "density") {
             if (props.densityAlpha > 0 || props.contoursAlpha > 0) {
-              accumulate(encoder);
-              gaussianBlur(encoder);
-              drawDensityMap(encoder);
+              accumulate(tailEncoder);
+              gaussianBlur(tailEncoder);
+              drawDensityMap(tailEncoder);
             }
           }
+          gammaCorrection(tailEncoder, textureView);
+          device.queue.submit([tailEncoder.finish()]);
         }
-
-        gammaCorrection(encoder, textureView);
-        device.queue.submit([encoder.finish()]);
       },
   );
 }

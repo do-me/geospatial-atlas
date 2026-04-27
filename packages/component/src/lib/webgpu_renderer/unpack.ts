@@ -126,10 +126,10 @@ export async function runUnpack(
   new Uint32Array(u32Buffer.getMappedRange()).set(packed);
   u32Buffer.unmap();
 
-  // Uniforms: count u32, min f32, scale f32, padding u32 (16 bytes).
+  // Uniforms: count u32, min f32, scale f32, chunk_offset_y u32 (16 bytes).
   const uniformBuffer = device.createBuffer({
     size: 16,
-    usage: GPUBufferUsage.UNIFORM,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     mappedAtCreation: true,
   });
   const uniformView = new DataView(uniformBuffer.getMappedRange());
@@ -140,7 +140,7 @@ export async function runUnpack(
   // the divisor exact (f32 cannot represent 2^32 − 1 precisely).
   const scale = (bounds.max - bounds.min) / U32_MAX;
   uniformView.setFloat32(8, scale, true);
-  uniformView.setUint32(12, 0, true);
+  uniformView.setUint32(12, 0, true); // chunk_offset_y for the first chunk
   uniformBuffer.unmap();
 
   const bindGroup = device.createBindGroup({
@@ -152,22 +152,60 @@ export async function runUnpack(
     ],
   });
 
-  const encoder = device.createCommandEncoder();
-  const pass = encoder.beginComputePass();
-  pass.setPipeline(pipeline);
-  pass.setBindGroup(0, bindGroup);
-  // 2D dispatch — see ``UNPACK_STRIDE`` comment above. The shader walks
-  // ``id.y * STRIDE + id.x`` and bails when ``i >= count``, so it's safe
-  // for the y-tiling to over-cover the tail of the buffer.
+  // Chunked dispatch. A single 322 M-thread dispatch trips the Metal
+  // 5 s MTLCommandBuffer watchdog on cold loads — splitting it into
+  // ``CHUNK_TARGET_THREADS``-sized cmd buffers keeps each well under
+  // the wall-clock budget. The shader honours
+  // ``params.chunk_offset_y`` so per-thread indices land in the right
+  // slice of the destination buffer.
+  const CHUNK_TARGET_THREADS = 16_000_000;
   const workgroupsX = UNPACK_STRIDE / UNPACK_WG_SIZE;
   const workgroupsY = Math.max(1, Math.ceil(count / UNPACK_STRIDE));
-  pass.dispatchWorkgroups(workgroupsX, workgroupsY);
-  pass.end();
-  device.queue.submit([encoder.finish()]);
+  const targetWorkgroupsPerChunk = Math.max(
+    1,
+    Math.floor(CHUNK_TARGET_THREADS / UNPACK_STRIDE),
+  );
+  const numChunks = Math.max(1, Math.ceil(workgroupsY / targetWorkgroupsPerChunk));
+  const chunkSizeY = Math.ceil(workgroupsY / numChunks);
 
-  // Defer-destroy: the in-flight dispatch still references both buffers
-  // until the submit completes. ``onSubmittedWorkDone`` resolves once
-  // every prior submit has executed — destroying earlier triggers the
+  if (!(globalThis as any).__atlasUnpackDiagLogged) {
+    (globalThis as any).__atlasUnpackDiagLogged = true;
+    console.log(
+      `[atlas-unpack-diag] count=${count} workgroupsY=${workgroupsY} chunkSizeY=${chunkSizeY} numChunks=${numChunks} bounds=[${bounds.min},${bounds.max}] u32Bytes=${u32Bytes}`,
+    );
+  }
+
+  // Reusable 16-byte scratch for the per-chunk uniform write — only the
+  // chunk_offset_y field changes between chunks.
+  const uniformScratch = new ArrayBuffer(16);
+  const scratchView = new DataView(uniformScratch);
+  scratchView.setUint32(0, count, true);
+  scratchView.setFloat32(4, bounds.min, true);
+  scratchView.setFloat32(8, scale, true);
+
+  for (let chunk = 0; chunk < numChunks; chunk++) {
+    const offsetY = chunk * chunkSizeY;
+    const remaining = Math.min(chunkSizeY, workgroupsY - offsetY);
+    if (remaining <= 0) break;
+
+    if (chunk > 0) {
+      // First chunk's uniform was already populated via mappedAtCreation.
+      scratchView.setUint32(12, offsetY, true);
+      device.queue.writeBuffer(uniformBuffer, 0, uniformScratch);
+    }
+
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, bindGroup);
+    pass.dispatchWorkgroups(workgroupsX, remaining);
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+  }
+
+  // Defer-destroy: the in-flight dispatches still reference both buffers
+  // until every submit completes. ``onSubmittedWorkDone`` resolves once
+  // the queue drains — destroying earlier triggers the
   // ``MTLDevice``-poisoning fault that ``utils.ts:gpuBuffer`` already
   // works around for the persistent f32 destinations.
   await device.queue.onSubmittedWorkDone();

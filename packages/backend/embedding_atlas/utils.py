@@ -63,45 +63,67 @@ def load_huggingface_data(filename: str, splits: list[str] | None) -> pd.DataFra
     return df
 
 
-# IPC compression. zstd squashes a sorted u32 lon/lat scatter to ~10 % of
-# raw bytes — at the eubucco 322 M-row file the wire goes 2.58 GB → ~250
-# MB, which is what unblocks the post-u32 browser fetch (Chrome's
-# ``Response.arrayBuffer()`` aborts past ~2 GB; the auto-memory note
-# documents the silent-fail behaviour we hit before this fix). The
-# compression cost is single-threaded zstd on the server's main writer
-# thread — measured 350-450 MB/s on the M-series box, so ~3 s for 1.3 GB
-# of u32. The decompress side runs in JS via ``fzstd``.
-#
-# We hard-wire zstd here because the client-side codec is unconditionally
-# registered in ``EmbeddingViewMosaic.svelte``; once both ends understand
-# the format there's no value in the f32-passthrough fallback.
-_IPC_WRITE_OPTIONS = pa.ipc.IpcWriteOptions(compression="zstd")
+# IPC compression is OFF. We tried zstd and the gain wasn't worth the
+# damage:
+#   1. fzstd 0.1.1 (the JS decoder we ship via flechette) rejects the
+#      payload pyarrow emits — every column-discovery query fails with
+#      ``Error: invalid zstd data`` (frame magic mismatch).
+#   2. Even when fzstd accepted the bytes, pyarrow's zstd IPC writer
+#      drops the 8-byte buffer padding flechette requires for
+#      ``BigInt64Array`` views, so ``__row_index__`` blows up with
+#      ``start offset of BigInt64Array should be a multiple of 8``.
+#   3. The compression ratio on randomized u32 lon/lat is ~8 % anyway
+#      (measured on the eubucco 322 M-row file: 3.26 GB compressed vs
+#      ~3.86 GB raw), so the wire savings don't justify either bug.
+# The 2 GB ``Response.arrayBuffer()`` ceiling that originally motivated
+# zstd is now bypassed by ``streamingRestConnector`` (viewer side), which
+# splits the body into per-message ``Uint8Array``s as it streams in,
+# never allocating a single buffer larger than ``_MAX_BATCH_ROWS`` × the
+# row width (see comment on _MAX_BATCH_ROWS below).
+_IPC_WRITE_OPTIONS = pa.ipc.IpcWriteOptions()
+
+
+# Per-batch row cap when serialising large tables. ``combine_chunks``
+# (one batch with a ~2.6 GB body for the 322 M-row scatter) trips two
+# limits in the browser:
+#   1. Chrome's per-tab single-``ArrayBuffer`` cap is ~2.0 GB on
+#      macOS — the body is one Arrow buffer per column, and the JS
+#      streaming connector's pre-allocated ``Uint8Array`` for the
+#      Content-Length-sized response goes ``Array buffer allocation
+#      failed`` past 2 GB regardless of free RAM.
+#   2. Even when split across two columns, a single 1.29 GB-per-column
+#      buffer holds the whole IPC body in one message — which means the
+#      streaming JS decoder cannot find a message boundary to chunk on.
+# At the eubucco file the largest single Arrow IPC batch we want is
+# ~256 K rows = ~2 MB body for u32+u32 — small enough that JS sees ~1230
+# small messages and never holds more than a few MB in any one
+# allocation. Per-batch IPC framing overhead is ~144 bytes; over 1230
+# batches that is ~177 KB on the wire, lost in the noise.
+_MAX_BATCH_ROWS = 262_144
 
 
 def arrow_to_bytes(arrow: pa.Table | pa.RecordBatchReader):
     # When DuckDB hands back a RecordBatchReader (1.4+), draining it
     # batch-by-batch in Python is dramatically slower than letting Arrow
     # coalesce in C++ — measured 3.2 s vs. 0.28 s on a 302 MB / 75 M-row
-    # scatter result. We drain to a Table first, then serialise in one
-    # write. The streaming path is still available via ``stream_arrow_ipc``
-    # for callers that need the per-batch memory cap.
+    # scatter result. We drain to a Table first, then re-batch with a
+    # bounded ``max_chunksize`` so the JS streaming decoder always sees
+    # message-aligned chunks.
     if isinstance(arrow, pa.RecordBatchReader):
         arrow = arrow.read_all()
-    # Coalesce all column chunks into a single contiguous batch *before*
-    # writing the IPC stream. DuckDB exports a 75 M-row Float32 column as
-    # ~610 RecordBatches (default 122 880 rows each); the JS Arrow library
-    # then has to allocate a 300 MB Float32Array and `memcpy` every chunk
-    # into it the moment the renderer calls `.toArray()` for GPU upload.
-    # ``combine_chunks`` does the merge once on the C++ side (~10 GB/s
-    # vectorised memcpy), so the wire stream is one batch and the
-    # browser-side `.toArray()` returns the underlying buffer view with
-    # zero copy. Net: ~500 ms shaved off the browser GPU-upload path on a
-    # 600 MB scatter pull.
-    if isinstance(arrow, pa.Table) and arrow.num_rows > 0:
-        arrow = arrow.combine_chunks()
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, arrow.schema, options=_IPC_WRITE_OPTIONS) as writer:
-        writer.write(arrow)
+        if isinstance(arrow, pa.Table) and arrow.num_rows > 0:
+            # Single combine + re-batch: the combine walks chunk-by-chunk
+            # in C++ (~10 GB/s) so a 2.6 GB scatter rebatched into 1230
+            # 256 K-row batches still totals ~250 ms — invisible next to
+            # the network transfer of the 2.58 GB body.
+            for batch in arrow.combine_chunks().to_batches(
+                max_chunksize=_MAX_BATCH_ROWS
+            ):
+                writer.write_batch(batch)
+        else:
+            writer.write(arrow)
     return sink.getvalue().to_pybytes()
 
 

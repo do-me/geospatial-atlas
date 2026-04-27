@@ -5,6 +5,19 @@ import type { BindGroups } from "./bind_groups.js";
 import type { DownsampleResources } from "./downsample.js";
 import type { AuxiliaryResources, DataBuffers } from "./renderer.js";
 
+/**
+ * Per-chunk callable returned by ``makeDrawPointsCommand``. Caller
+ * invokes once per slice, controlling whether the slice should clear
+ * the color/alpha attachments (``isFirstChunk=true`` for the first
+ * one) and which instance range to draw.
+ */
+export type DrawPointsChunkFn = (
+  encoder: GPUCommandEncoder,
+  instanceFirst: number,
+  instanceCount: number,
+  isFirstChunk: boolean,
+) => void;
+
 export function makeDrawPointsCommand(
   df: Dataflow,
   device: Node<GPUDevice>,
@@ -12,7 +25,7 @@ export function makeDrawPointsCommand(
   bindGroups: BindGroups,
   dataBuffers: DataBuffers,
   auxiliaryResources: AuxiliaryResources,
-): Node<(encoder: GPUCommandEncoder) => void> {
+): Node<DrawPointsChunkFn> {
   const pipeline = df.derive([device, module, bindGroups.layouts], (device, module, layouts) =>
     device.createRenderPipeline({
       layout: device.createPipelineLayout({ bindGroupLayouts: [layouts.group0, layouts.group1] }),
@@ -40,25 +53,29 @@ export function makeDrawPointsCommand(
       pipeline,
       bindGroups.group0,
       bindGroups.group1,
-      dataBuffers.count,
       auxiliaryResources.colorTexture,
       auxiliaryResources.alphaTexture,
     ],
-    (pipeline, group0, group1, count, colorTexture, alphaTexture) => (encoder) => {
-      let pass = encoder.beginRenderPass({
-        colorAttachments: [
-          { clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store", view: colorTexture.createView() },
-          { clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store", view: alphaTexture.createView() },
-        ],
-      });
-      pass.setPipeline(pipeline);
-      pass.setBindGroup(0, group0);
-      pass.setBindGroup(1, group1);
-      if (count > 0) {
-        pass.draw(4, count);
-      }
-      pass.end();
-    },
+    (pipeline, group0, group1, colorTexture, alphaTexture) =>
+      (encoder, instanceFirst, instanceCount, isFirstChunk) => {
+        // Only the first chunk in a multi-cmd-buf chunked draw clears
+        // the attachments; subsequent chunks ``load`` the partial
+        // accumulation so additive blending across chunks lands.
+        const op: GPULoadOp = isFirstChunk ? "clear" : "load";
+        let pass = encoder.beginRenderPass({
+          colorAttachments: [
+            { clearValue: [0, 0, 0, 0], loadOp: op, storeOp: "store", view: colorTexture.createView() },
+            { clearValue: [0, 0, 0, 0], loadOp: op, storeOp: "store", view: alphaTexture.createView() },
+          ],
+        });
+        pass.setPipeline(pipeline);
+        pass.setBindGroup(0, group0);
+        pass.setBindGroup(1, group1);
+        if (instanceCount > 0) {
+          pass.draw(4, instanceCount, 0, instanceFirst);
+        }
+        pass.end();
+      },
   );
 }
 

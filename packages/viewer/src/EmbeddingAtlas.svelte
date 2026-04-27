@@ -276,7 +276,20 @@
     if (initialState) {
       loadState(initialState);
     }
-    if (Object.keys(charts).length == 0) {
+    // ``charts`` may be pre-populated by ``loadState`` from a saved
+    // viewer-state.json. The original gate "if charts is empty"
+    // skipped discovery entirely on every subsequent launch — and on
+    // huge datasets where the FIRST-launch discovery silently failed
+    // (e.g. APPROX_COUNT_DISTINCT timed out), the saved state would
+    // hold only the primary embedding/predicates/instances triplet
+    // and the side panel would stay column-chart-free forever. Detect
+    // "primary-only" by checking whether any histogram/count-plot
+    // chart is in the loaded set, and re-run discovery if not.
+    const hasColumnCharts = Object.values(charts).some(
+      (s: any) => s && (s.type === "histogram" || s.type === "count-plot"),
+    );
+    const initFromEmpty = Object.keys(charts).length == 0;
+    if (initFromEmpty || !hasColumnCharts) {
       // Two-phase chart discovery: mount the embedding/predicates/instances
       // charts immediately (no DB queries needed), then in the background
       // query distinct counts to add column histograms/count-plots. The
@@ -292,11 +305,18 @@
             importance: data.importance ?? undefined,
           }
         : undefined;
+      // Only seed primary charts when the saved state is empty;
+      // otherwise we'd overwrite the user's previously-arranged
+      // chart layout. When primary already exists in the saved
+      // state, we preserve it and just append the missing column
+      // charts via discovery below.
       const primary = defaultPrimaryCharts({
         projection,
         config: defaultChartsConfig ?? undefined,
       });
-      charts = Object.fromEntries(primary.map((spec, i) => [`${i + 1}`, spec]));
+      if (initFromEmpty) {
+        charts = Object.fromEntries(primary.map((spec, i) => [`${i + 1}`, spec]));
+      }
       initialized = true;
       // Defer column-chart discovery until the embedding scatter has actually
       // reached its first frame. Mounting a dozen chart components straight
@@ -306,6 +326,10 @@
       // ~250 ms after first-paint gives the renderer a clean stretch to do
       // the GPU upload, then the side-panel charts populate quietly.
       const scheduleColumnDiscovery = () => {
+        const t0 = performance.now();
+        console.log(
+          `[atlas-discover] starting column-chart discovery: ${columns.length} columns, table=${data.table}`,
+        );
         defaultColumnCharts({
           coordinator,
           table: data.table,
@@ -314,16 +338,33 @@
           config: defaultChartsConfig ?? undefined,
         })
           .then((extra) => {
+            const dt = performance.now() - t0;
+            console.log(
+              `[atlas-discover] discovery resolved: ${extra.length} extra charts in ${dt.toFixed(0)}ms`,
+            );
             if (extra.length === 0) return;
+            // Find the highest-numbered chart id currently in use so
+            // we can append after them. ``Object.keys`` may return
+            // string ids loaded from saved state (where the user may
+            // have rearranged / removed entries), so parse + max
+            // rather than assuming dense 1..N numbering.
             const next = { ...charts };
-            let nextId = primary.length + 1;
+            let nextId = 1;
+            for (const k of Object.keys(next)) {
+              const n = Number(k);
+              if (Number.isFinite(n) && n >= nextId) nextId = n + 1;
+            }
             for (const spec of extra) {
               next[`${nextId++}`] = spec;
             }
             charts = next;
           })
           .catch((err) => {
-            console.warn("[atlas] column-chart discovery failed:", err);
+            const dt = performance.now() - t0;
+            console.warn(
+              `[atlas-discover] column-chart discovery FAILED in ${dt.toFixed(0)}ms:`,
+              err,
+            );
           });
       };
       // Wait for the scatter render to land. Polled because we don't have a
@@ -337,8 +378,17 @@
       }
       const start = performance.now();
       const poll = () => {
-        if (w.__atlasFirstBigRenderGpuLogged || performance.now() - start > 60000) {
-          scheduleColumnDiscovery();
+        const fired = w.__atlasFirstBigRenderGpuLogged === true;
+        const overdue = performance.now() - start > 60000;
+        if (fired || overdue) {
+          console.log(
+            `[atlas-discover] poll resolved after ${(performance.now() - start).toFixed(0)}ms (firstBigRender=${fired} overdue=${overdue})`,
+          );
+          // Hand the heavy APPROX_COUNT_DISTINCT batch to ``setTimeout``
+          // so it runs in its own task (after any in-flight GPU
+          // submissions have at least been *queued*) rather than
+          // racing the post-paint microtasks.
+          setTimeout(scheduleColumnDiscovery, 250);
           return;
         }
         setTimeout(poll, 100);

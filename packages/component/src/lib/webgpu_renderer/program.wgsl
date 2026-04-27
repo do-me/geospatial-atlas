@@ -48,7 +48,13 @@ struct DownsampleUniforms {
   render_limit: u32,
   frame_seed: u32,
   density_weight: f32,
-  _padding: f32,
+  // Chunk offset in workgroup-Y units. Host splits each downsample
+  // pass into K command-buffer-sized chunks (each ~count/K threads)
+  // so no single MTLCommandBuffer iterates the full 322M-row dataset
+  // — keeps each cmd buffer well under Metal's 5 s wall-clock
+  // watchdog regardless of how many points are in viewport. Per-thread
+  // index = (id.y + chunk_offset_y) * DOWNSAMPLE_STRIDE + id.x.
+  chunk_offset_y: u32,
 }
 
 struct PointData {
@@ -441,45 +447,113 @@ fn random_float(seed: u32) -> f32 {
 // of 256 workgroups × 256 threads = 65536.
 override DOWNSAMPLE_STRIDE: u32 = 65536u;
 
+// Workgroup-local accumulators for viewport_cull. Each workgroup tallies
+// its visible count + max density in workgroup memory (which is L1 / fast),
+// then ONE thread folds the totals into the global ``downsample_counters``
+// via TWO global atomics. This collapses the global-atomic hotspot from
+// N (visible threads, up to 200M+ at world zoom on the eubucco 322M-row
+// dataset) to ceil(N / wg_size) — at wg_size=256 that's ~781K global atomic
+// ops instead of 200M.
+//
+// Why this matters: M-series GPU sustained throughput on a single contended
+// atomic address is ~50-100 Mops/s. 200M atomicAdd on counters[0] +
+// 200M atomicMax on counters[1] takes 2-3 s EACH and the two cannot fully
+// overlap (same warp emits both), so a single viewport_cull dispatch
+// exceeds 5 s and trips ``kIOGPUCommandBufferCallbackErrorTimeout`` —
+// which then poisons the device with cascading
+// ``kIOGPUCommandBufferCallbackErrorSubmissionsIgnored`` rejections.
+//
+// ``compact_accepted`` already uses this same workgroup-reduction pattern
+// (see ``wg_local_count`` below); we mirror it here for the cull pass.
+// Variable names must be globally unique across compute entry-points in
+// the module — hence the ``wg_cull_*`` prefix.
+var<workgroup> wg_cull_visible: atomic<u32>;
+var<workgroup> wg_cull_max_density: atomic<u32>;
+
 @compute @workgroup_size(wg_downsample_cull)
-fn downsample_viewport_cull(@builtin(global_invocation_id) id: vec3<u32>) {
-  let index = id.y * DOWNSAMPLE_STRIDE + id.x;
-  if (index >= uniforms.count) { return; }
+fn downsample_viewport_cull(
+  @builtin(global_invocation_id) id: vec3<u32>,
+  @builtin(local_invocation_index) lid: u32,
+) {
+  // Initialise workgroup accumulators on thread 0 then sync.
+  if (lid == 0u) {
+    atomicStore(&wg_cull_visible, 0u);
+    atomicStore(&wg_cull_max_density, 0u);
+  }
+  workgroupBarrier();
 
-  let point = get_point(index);
-  let pos = uniforms.matrix * point.position;
+  let actual_y = id.y + downsample_uniforms.chunk_offset_y;
+  let index = actual_y * DOWNSAMPLE_STRIDE + id.x;
+  // Use a flag rather than early-return — every thread must reach the
+  // workgroupBarrier below, even tail-of-buffer threads that are out of
+  // range. (The original `if (index >= count) return;` was safe ONLY when
+  // there were no workgroup barriers in this pass.)
+  let in_range = index < uniforms.count;
 
-  // Check if point is in viewport [-1, 1]
-  let in_viewport = pos.x >= -1.0 && pos.x <= 1.0 && pos.y >= -1.0 && pos.y <= 1.0;
+  var in_viewport: bool = false;
+  var density: f32 = -1.0;
+  var density_fixed: u32 = 0u;
 
-  if (in_viewport) {
-    // Increment visible count
-    atomicAdd(&downsample_counters[0], 1u);
+  if (in_range) {
+    let point = get_point(index);
+    let pos = uniforms.matrix * point.position;
 
-    // Lookup density at this point's location from blur_buffer
-    let width = uniforms.density_width;
-    let height = uniforms.density_height;
-    let dx = (pos.x + 1.0) / 2.0 * f32(width) - 0.5;
-    let dy = (pos.y + 1.0) / 2.0 * f32(height) - 0.5;
-    let ix = clamp(i32(dx), 0, width - 1);
-    let iy = clamp(i32(dy), 0, height - 1);
+    // Check if point is in viewport [-1, 1]
+    in_viewport = pos.x >= -1.0 && pos.x <= 1.0 && pos.y >= -1.0 && pos.y <= 1.0;
 
-    // Sum density across all categories at this grid cell
-    var density: f32 = 0.0;
-    for (var c: u32 = 0; c < uniforms.category_count; c++) {
-      let offset = iy * width + ix + i32(c) * (width * height);
-      density += f32(blur_buffer[offset]);
+    if (in_viewport) {
+      // Lookup density at this point's location from blur_buffer
+      let width = uniforms.density_width;
+      let height = uniforms.density_height;
+      let dx = (pos.x + 1.0) / 2.0 * f32(width) - 0.5;
+      let dy = (pos.y + 1.0) / 2.0 * f32(height) - 0.5;
+      let ix = clamp(i32(dx), 0, width - 1);
+      let iy = clamp(i32(dy), 0, height - 1);
+
+      // Sum density across all categories at this grid cell
+      var d: f32 = 0.0;
+      for (var c: u32 = 0; c < uniforms.category_count; c++) {
+        let offset = iy * width + ix + i32(c) * (width * height);
+        d += f32(blur_buffer[offset]);
+      }
+      // Store density (positive = visible). Add small epsilon to ensure > 0.
+      density = min(max(d, 0.0001), 65535.0);
+      density_fixed = u32(density * 65536.0);
     }
-    // Store density (positive = visible). Add small epsilon to ensure > 0.
-    density = min(max(density, 0.0001), 65535.0);
-    point_data[index] = density;
+  }
 
-    // Track max density using fixed-point atomics
-    let density_fixed = u32(density * 65536.0);
-    atomicMax(&downsample_counters[1], density_fixed);
-  } else {
-    // Not visible: store -1.0
-    point_data[index] = -1.0;
+  // Per-visible-point updates land in workgroup-scope atomics (L1, ~1 ns).
+  // No L2 ping-pong, no global serialization across millions of threads.
+  if (in_viewport) {
+    atomicAdd(&wg_cull_visible, 1u);
+    atomicMax(&wg_cull_max_density, density_fixed);
+  }
+  workgroupBarrier();
+
+  // ONE thread per workgroup folds workgroup totals into the global
+  // counters. Two global atomics per workgroup × ~781K workgroups at
+  // 200M visible = 1.56M global atomics total — finishes in ~20 ms
+  // even under heavy contention. Compare 400M global atomics in the
+  // original code.
+  if (lid == 0u) {
+    let total = atomicLoad(&wg_cull_visible);
+    if (total > 0u) {
+      atomicAdd(&downsample_counters[0], total);
+    }
+    let max_d = atomicLoad(&wg_cull_max_density);
+    if (max_d > 0u) {
+      atomicMax(&downsample_counters[1], max_d);
+    }
+  }
+
+  // Write per-thread output AFTER the workgroup-fold so the barriers
+  // above sequence consistently across all threads.
+  if (in_range) {
+    if (in_viewport) {
+      point_data[index] = density;
+    } else {
+      point_data[index] = -1.0;
+    }
   }
 }
 
@@ -489,7 +563,8 @@ fn downsample_viewport_cull(@builtin(global_invocation_id) id: vec3<u32>) {
 
 @compute @workgroup_size(wg_density_sample)
 fn downsample_density_sample(@builtin(global_invocation_id) id: vec3<u32>) {
-  let index = id.y * DOWNSAMPLE_STRIDE + id.x;
+  let actual_y = id.y + downsample_uniforms.chunk_offset_y;
+  let index = actual_y * DOWNSAMPLE_STRIDE + id.x;
   if (index >= uniforms.count) { return; }
 
   let density = point_data[index];
@@ -592,7 +667,8 @@ fn compact_accepted(
   }
   workgroupBarrier();
 
-  let index = id.y * DOWNSAMPLE_STRIDE + id.x;
+  let actual_y = id.y + downsample_uniforms.chunk_offset_y;
+  let index = actual_y * DOWNSAMPLE_STRIDE + id.x;
   let in_range = index < uniforms.count;
   let accepted = in_range && (point_data[index] >= 0.0);
 
@@ -613,6 +689,21 @@ fn compact_accepted(
     if (global_slot < downsample_uniforms.render_limit) {
       compact_indices[global_slot] = index;
     }
+  }
+
+  // Cap the drawIndirect instance count at render_limit. Without this
+  // cap, ``density_sample``'s probabilistic acceptance over-shoots
+  // (the legacy ``base_rate * inverse_weight * 2.0`` formula targets
+  // ~2× render_limit on average so density weighting can rebalance),
+  // and at huge N the drawIndirect issues ~2× the planned instances —
+  // the per-instance vertex shader iteration easily exceeds Metal's
+  // 5 s wall-clock watchdog. ``compact_indices`` itself is already
+  // bounded by the ``global_slot < render_limit`` check above, so the
+  // post-cap drawIndirect lands on the populated slice only. Each WG
+  // races to the same min; the last write wins and the final value is
+  // ``min(actual_accepted, render_limit)``.
+  if (lid == 0u) {
+    atomicMin(&indirect_args[1], downsample_uniforms.render_limit);
   }
 }
 

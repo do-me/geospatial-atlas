@@ -22,8 +22,11 @@ struct UnpackParams {
   // Linear inverse-map: f32 = min + u32 * scale, where scale = (max - min) / (2^32 - 1).
   min: f32,
   scale: f32,
-  // Padding so the struct is 16-byte aligned (WGSL uniform buffer rule).
-  _padding: u32,
+  // Chunk offset in workgroup-Y units. Host splits the unpack into K
+  // command-buffer-sized chunks so each MTLCommandBuffer stays under
+  // Metal's 5 s wall-clock watchdog at 322 M rows. Per-thread index
+  // = (id.y + chunk_offset_y) * UNPACK_STRIDE + id.x.
+  chunk_offset_y: u32,
 }
 
 @group(0) @binding(0) var<storage, read> u32_buffer: array<u32>;
@@ -41,7 +44,8 @@ override UNPACK_STRIDE: u32 = 65536u;
 
 @compute @workgroup_size(wg_unpack, 1)
 fn unpack(@builtin(global_invocation_id) id: vec3<u32>) {
-  let i = id.y * UNPACK_STRIDE + id.x;
+  let actual_y = id.y + params.chunk_offset_y;
+  let i = actual_y * UNPACK_STRIDE + id.x;
   if (i >= params.count) { return; }
   // f32 → u32 promotion is lossy past 2^24 (mantissa width), but here
   // f32(u32) is only an intermediate for the FMA — the final f32 result
