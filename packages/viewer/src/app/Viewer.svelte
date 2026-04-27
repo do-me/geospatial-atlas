@@ -14,6 +14,15 @@
   import type { DataSource } from "./data_source.js";
 
   const coordinator = defaultCoordinator();
+  // Disable Mosaic's LRU query cache. Defaults are max=1000 entries, ttl=3 h,
+  // which pins every Arrow Table result for hours — at 322 M each scatter
+  // result is ~2.5 GB of Arrow Vector chunks, so a few filter changes
+  // exhaust V8's ArrayBuffer pool and the next ``toArray`` OOMs (heap
+  // snapshot showed 4093 small Vector buffers totalling 8+ GiB held by
+  // ``QueryManager.clientCache``). Histogram/count queries are tiny —
+  // letting them re-fetch on filter change is cheap; pinning a 2.5 GB
+  // scatter is not.
+  coordinator.manager.cache(false);
 
   interface Props {
     dataSource: DataSource;

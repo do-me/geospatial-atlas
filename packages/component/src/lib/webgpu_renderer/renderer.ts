@@ -236,6 +236,18 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
       this.props.yPacked != null &&
       this.props.coordsBoundsX != null &&
       this.props.coordsBoundsY != null;
+    // Memory-leak fix (heap snapshot proved 4 × 627 MiB Uint32Arrays were
+    // pinned via these refs after the consumer nulled xPacked, sealing the
+    // V8 ArrayBuffer pool below the next batch's 1.3 GB demand). When
+    // packed mode is OFF (consumer signalled null), drop the previous
+    // packed refs so V8 can reclaim the backing stores. Identity check is
+    // restored on the next non-null setProps via the unpack pass.
+    if (!usePacked) {
+      this.lastXPacked = null;
+      this.lastYPacked = null;
+      this.lastCoordsBoundsX = null;
+      this.lastCoordsBoundsY = null;
+    }
     const count = usePacked
       ? (this.props.xPacked!.length)
       : this.props.x.length;
@@ -328,6 +340,21 @@ export class EmbeddingRendererWebGPU implements EmbeddingRenderer {
     // re-derive lands in the right place.
     const runX = !sameX;
     const runY = !sameY;
+    // Memory-leak fix: drop the previous identity refs *before* the unpack
+    // chain awaits — without this the OLD lastXPacked (627 MiB at 164 M
+    // points, 1.29 GB at 322 M) lives alongside the NEW xPacked param for
+    // the duration of runUnpack, doubling the V8 ArrayBuffer pressure
+    // exactly when toArray() in the next scatter is competing for the
+    // same pool. Re-assignment to the new value happens after each
+    // ``runUnpack`` resolves below.
+    if (runX) {
+      this.lastXPacked = null;
+      this.lastCoordsBoundsX = null;
+    }
+    if (runY) {
+      this.lastYPacked = null;
+      this.lastCoordsBoundsY = null;
+    }
     const boundsXCopy: [number, number] = [boundsX[0], boundsX[1]];
     const boundsYCopy: [number, number] = [boundsY[0], boundsY[1]];
     // Self-healing chain: ``.catch`` swallows a poisoned previous chain

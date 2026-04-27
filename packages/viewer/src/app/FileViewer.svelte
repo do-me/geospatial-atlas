@@ -23,6 +23,9 @@
   import { Logger } from "./logging.js";
 
   const coordinator = defaultCoordinator();
+  // Same rationale as Viewer.svelte — disable the LRU query cache so
+  // Arrow scatter results aren't pinned for 3 h.
+  coordinator.manager.cache(false);
   const databaseInitialized = initializeDatabase(coordinator, "wasm", null);
 
   let stage: "load-data" | "columns" | "ready" | "messages" = $state.raw("load-data");

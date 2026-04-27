@@ -482,20 +482,29 @@ if (debugPort && /^\d+$/.test(debugPort)) {
 // scatter-renderer whose whole value prop is WebGPU.
 app.commandLine.appendSwitch("enable-unsafe-webgpu");
 
-// Bump V8's old-generation heap cap on the renderer so a 322 M-row
-// scatter re-fetch doesn't trip "Array buffer allocation failed".
-// Each axis ships as a 1.29 GB Uint32Array; toArray() materialises a
-// fresh contiguous copy before the previous render's arrays are
-// released (renderer.props pins them ref-equal until the next
-// setProps microtask), so peak heap reaches ~5.8 GB during a
-// full-extent re-fetch. V8's default is ~4 GB on 64-bit Electron,
-// which is exactly the OOM we saw at 322 M. 12 GB is V8 *budget* —
-// the OS only commits pages we actually touch, so this doesn't
-// expand the renderer's resident memory; it just gives V8 the
-// allocator headroom to land the second copy. Pairs with the
-// DuckDB ``memory_limit`` cap (``fast_load.py``) that keeps the
-// sidecar from contesting RAM with the renderer.
-app.commandLine.appendSwitch("js-flags", "--max-old-space-size=12288");
+// V8 tuning for the 322 M-row scatter:
+//
+//   --max-old-space-size=16384
+//     Each axis ships as a 1.29 GB Uint32Array; toArray() materialises
+//     a fresh contiguous copy and the previous render's arrays only
+//     drop their refs at the next setProps microtask, so peak heap
+//     reaches ~5.8 GB during a full-extent re-fetch — and color-by
+//     adds a 322 MB category buffer on top. Default V8 budget (~4 GB)
+//     OOMs immediately at this scale. 16 GB gives 2-3 full peaks of
+//     headroom before fragmentation forces the next major GC; 12 GB
+//     was empirically tight when 9 minutes of accumulated sidebar +
+//     mosaic state stacked under the next scatter peak. V8 *budget*
+//     is not resident memory: the OS only commits pages we touch.
+//
+//   --expose-gc
+//     Lets EmbeddingViewMosaic.queryResult call ``globalThis.gc()``
+//     synchronously between the null-out of the prior render's
+//     buffers and the new toArray(). Without that, V8 only runs major
+//     GC under pressure — and "pressure" surfaces as an alloc failure
+//     (the RangeError we saw mid-session). Forcing GC turns "alloc
+//     fails because old buffers haven't been swept yet" into "alloc
+//     succeeds against compacted heap".
+app.commandLine.appendSwitch("js-flags", "--max-old-space-size=16384 --expose-gc");
 
 // Single-instance: subsequent launches focus the existing window and
 // forward the dataset arg.

@@ -232,6 +232,16 @@
         coordinator: deps.coordinator,
         selection: filter ?? undefined,
         query: (predicate) => {
+          // NOTE: We previously pre-released ``xPackedData``/``yPackedData``
+          // here on filter change to give V8 ArrayBuffer headroom for the
+          // incoming response. That backfired: when the subsequent
+          // ``queryResult`` toArray() also OOMs (e.g. 164 M residential
+          // with the c column needs 1412 MB and there is still a 6+ GB
+          // Arrow-chunk leak retaining most of the heap), the renderer is
+          // left with empty state and a blank canvas indefinitely. Better
+          // to keep showing the last good data; the new fetch may still
+          // fail but at least the prior 322 M render persists. Real fix
+          // is to plug the chunk leak (D).
           let xExpr: any;
           let yExpr: any;
           if (packed && packedBounds != null && precomputedCols != null) {
@@ -268,7 +278,7 @@
             })
             .where(predicate);
         },
-        queryResult: (data: any) => {
+        queryResult: async (data: any) => {
           // Browser-side scatter pipeline timing — surfaces in DevTools.
           // ``getChild().toArray()`` is the suspect: if DuckDB exports
           // multi-chunk Arrow (default), this allocates a fresh
@@ -285,18 +295,40 @@
           // is two 1.29 GB Uint32Arrays + a 322 MB Uint8Array. If the
           // previous batch's arrays are still anchored in the renderer
           // signals, peak heap doubles to ~5.8 GB — which trips V8's
-          // ArrayBuffer allocator on zoom-out (full-extent re-fetch). Svelte
-          // 5 ``$state.raw`` writes batch within a synchronous block, so
-          // these intermediate nulls never reach the renderer's effect; it
-          // only re-derives once we yield with the new arrays settled
-          // below. ``$effect.pre`` already gates on ``isWheeling`` so even
-          // if the flush *did* land mid-toArray, the canvas would stay
-          // suppressed.
+          // ArrayBuffer allocator on zoom-out (full-extent re-fetch).
           xPackedData = null;
           yPackedData = null;
           xData = EMPTY_F32;
           yData = EMPTY_F32;
           categoryData = null;
+          // Yield to a macrotask so Svelte 5's ``$state.raw`` flush can
+          // propagate the nulls into ``EmbeddingViewImpl`` and from there
+          // into ``renderer.setProps`` BEFORE we ask V8 for the next 1.3
+          // GB. Heap snapshot under the bug showed 4 × 627 MiB
+          // Uint32Arrays pinned via ``renderer.lastXPacked``/
+          // ``lastYPacked``; the renderer-side fix in ``renderer.ts``
+          // releases them when ``setProps({xPacked: null})`` fires, but
+          // that fire is microtask-deferred. Without this yield we run
+          // ``toArray()`` while the renderer still holds the prior
+          // 1.3 GB+1.3 GB and OOM. ``setTimeout(0)`` is enough to drain
+          // both Svelte's flush microtask and the subsequent setProps
+          // call. ~1 ms latency, negligible against a multi-second
+          // scatter.
+          await new Promise((r) => setTimeout(r, 0));
+          // Force a major GC between releasing the prior render's
+          // buffers and allocating the new ones. With the yield above
+          // the renderer has just released its lastXPacked/lastYPacked,
+          // so this sweep can actually reclaim them. Requires
+          // Electron's ``--expose-gc`` js-flag (set in
+          // apps/desktop/electron/main.ts). Gated by row count so the
+          // dev/standalone packages (where ``gc`` is never exposed) and
+          // small datasets pay no cost.
+          if (
+            numRowsHint > 50_000_000 &&
+            typeof (globalThis as any).gc === "function"
+          ) {
+            (globalThis as any).gc();
+          }
           let xArray, yArray, categoryArray;
           try {
             xArray = data.getChild("x").toArray();
@@ -732,7 +764,9 @@
   yIsAlreadyMercator={yIsAlreadyMercator}
   totalCount={totalCount}
   maxDensity={maxDensity}
-  categoryCount={categoryCount}
+  categoryCount={categoryColors != null && categoryColors.length > 1
+    ? categoryColors.length
+    : categoryCount}
   categoryColors={categoryColors}
   defaultViewportState={defaultViewportState}
   querySelection={querySelection}
