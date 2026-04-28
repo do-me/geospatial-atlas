@@ -4,7 +4,7 @@
 
 This is a fork of [Embedding Atlas](https://apple.github.io/embedding-atlas) adapted for geospatial data. As embeddings or rather their 2D projections share the exact same visualization challenges like 2D geospatial data, Embedding Atlas and all its functionality serve a great deal in geospatial data exploration!
 
-It can **visualize up to ~200M points** in your WebGPU-enabled browser! Make sure to use Chrome, Safari or activate the flag in Firefox.
+**Verified at 322 M points** in the desktop app on a 32 GB Apple Silicon laptop, **~100 M** in a vanilla browser tab (Chrome / Safari / Firefox-with-flag). For the full optimization journey see [docs/optimization_history.md](docs/optimization_history.md) and [docs/PERF-75M.md](docs/PERF-75M.md). Browser-side scale ceilings and the V8-flag workaround for the 322 M case are documented in [Troubleshooting](#troubleshooting) below.
 
 Find various example apps [here](https://github.com/do-me/geospatial-atlas-apps). Try for example the [6M GlobalGeoTree explorer](https://do-me.github.io/geospatial-atlas-apps/GlobalGeoTree/)! Load your own data (up to around 6M points) here: https://do-me.github.io/geospatial-atlas/app/!
 
@@ -80,12 +80,14 @@ uv --directory packages/backend run geospatial-atlas your_dataset_with_lat_lon_c
 ```
 
 Alternatively you can cd into the backend folder and run it from there:
+
 ```
 cd packages/backend
 uv run geospatial-atlas your_dataset_with_lat_lon_coords.parquet --text your_name_column
 ```
 
 The screenshots above were created with these two datasets:
+
 - [Overture Maps Places](https://docs.overturemaps.org/guides/places/), download with `uvx overturemaps download -f geoparquet --type=place -o places.parquet`
 - [Foursquare 100M Places](https://huggingface.co/datasets/do-me/foursquare_places_100M), [direct download]()
 - [50k poorly geocoded news](https://huggingface.co/datasets/do-me/50k_poorly_geocoded_news), [direct download](https://huggingface.co/datasets/do-me/50k_poorly_geocoded_news/resolve/main/geocoded_news.parquet)
@@ -95,13 +97,13 @@ The screenshots above were created with these two datasets:
 Pre-built native apps (Electron shell + bundled Python sidecar) are on
 the [releases page](https://github.com/do-me/geospatial-atlas/releases).
 
-| Platform                       | File                                         |
-|-------------------------------|----------------------------------------------|
-| macOS (Apple Silicon)         | `geospatial-atlas-macos-arm64.dmg`           |
-| Linux x86_64 (Debian/Ubuntu)  | `geospatial-atlas-linux-x64.deb`             |
-| Linux x86_64 (Fedora/RHEL)    | `geospatial-atlas-linux-x64.rpm`             |
-| Windows x86_64 (MSI)          | `geospatial-atlas-windows-x64.msi`           |
-| Windows x86_64 (NSIS setup)   | `geospatial-atlas-windows-x64-setup.exe`     |
+| Platform                     | File                                     |
+| ---------------------------- | ---------------------------------------- |
+| macOS (Apple Silicon)        | `geospatial-atlas-macos-arm64.dmg`       |
+| Linux x86_64 (Debian/Ubuntu) | `geospatial-atlas-linux-x64.deb`         |
+| Linux x86_64 (Fedora/RHEL)   | `geospatial-atlas-linux-x64.rpm`         |
+| Windows x86_64 (MSI)         | `geospatial-atlas-windows-x64.msi`       |
+| Windows x86_64 (NSIS setup)  | `geospatial-atlas-windows-x64-setup.exe` |
 
 Bundles are **unsigned** — Gatekeeper (macOS) and SmartScreen (Windows)
 will warn on first launch. Intel-Mac users aren't served by a
@@ -185,11 +187,11 @@ JSON entry with a single `url` field:
 
 Claude Desktop config file locations:
 
-| OS      | Path                                                                      |
-|---------|---------------------------------------------------------------------------|
-| macOS   | `~/Library/Application Support/Claude/claude_desktop_config.json`         |
-| Windows | `%APPDATA%\Claude\claude_desktop_config.json`                             |
-| Linux   | `~/.config/Claude/claude_desktop_config.json`                             |
+| OS      | Path                                                              |
+| ------- | ----------------------------------------------------------------- |
+| macOS   | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json`                     |
+| Linux   | `~/.config/Claude/claude_desktop_config.json`                     |
 
 Fully quit and reopen the client — the 31 tools above should appear in
 the tool picker. Swap the port if the server picked a different one
@@ -264,13 +266,130 @@ e2e/
     └── Test Data Viewer      #   Synthetic data scatter, UI controls
 ```
 
-## To Do
+## Performance
 
-- Disallow zooming out further than zoom level 0 to avoid weird shifting effects
-- Adapt density and point radius ranges
-- Add basemap attribution
-- Release own "geospatial-atlas" pip package?
-- And much more! Feel free to open PRs!
+Headline numbers per distribution:
+
+| Distro                       |              Verified ceiling | Notes                                                                                 |
+| ---------------------------- | ----------------------------: | ------------------------------------------------------------------------------------- |
+| Desktop (Electron)           |                  322 M points | M-series, 32 GB unified memory. V8 budget tuned to 16 GB; full feature surface.       |
+| Backend-frontend / browser   | ~100 M points (without flags) | 322 M reachable in Chrome with `--js-flags="--max-old-space-size=16384 --expose-gc"`. |
+| Standalone web (DuckDB-WASM) |      ~75 M points (estimated) | DuckDB-WASM 2 GB internal cap dominates; not measured at higher scale.                |
+
+Filter and tooltip latency at 322 M: ~3 s perceived between filter click
+and painted pixel; ~50 ms tooltip pick. Cold load (parquet → first
+frame) at 322 M: ~12–15 s.
+
+The two deep-dives are kept under [`docs/`](docs/):
+
+- [`docs/optimization_history.md`](docs/optimization_history.md) — the
+  322 M scaling chapter. Memory pipeline, Mosaic LRU pinning, Metal
+  watchdog, multi-distro compatibility matrix, current bottleneck,
+  open follow-ups.
+- [`docs/PERF-75M.md`](docs/PERF-75M.md) — the prior 75 M chapter.
+  Compaction + indirect draw, gesture-only downsample, workgroup-size
+  sweep.
+
+## Troubleshooting
+
+### `Array buffer allocation failed` / blank canvas at >100 M points
+
+The renderer's V8 heap budget is exhausted. The desktop app is auto-
+tuned to 16 GB; a vanilla browser tab is ~4 GB.
+
+- Easiest path: use the [desktop app](#desktop-app-download-v007).
+- Browser fallback: launch Chrome with elevated V8 flags.
+  ```bash
+  # macOS
+  /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+    --js-flags="--max-old-space-size=16384 --expose-gc" \
+    http://localhost:5055
+  # Linux
+  google-chrome --js-flags="--max-old-space-size=16384 --expose-gc" \
+    http://localhost:5055
+  ```
+- Or reduce the working set (SQL filter, `--sample`, smaller column set).
+
+### Canvas freezes mid-pan on macOS, recovers only on reload
+
+Metal's 5 s `MTLCommandBuffer` watchdog killed a draw pass. We chunk
+dispatches to stay under the limit, but tabs stalled by DevTools or
+extreme background load can re-trip it. Reload the page; the underlying
+data and view state are preserved in the URL.
+
+### Empty map after switching datasets in the desktop app
+
+`viewer-state.json` retains per-dataset precomputed-column metadata; if
+the same parquet is reloaded with a different schema the stale entry
+wins. Quit the app, then on macOS:
+
+```bash
+rm "$HOME/Library/Application Support/Geospatial Atlas/viewer-state.json"
+```
+
+(Equivalent path under `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` on
+Linux.) Relaunch.
+
+### Disk fills up after running the CLI on a huge parquet
+
+DuckDB spills to `$TMPDIR/duckdb_gsa_*`. Sessions on builds that
+predate the auto-cleanup landing may have left 80–120 GB dirs behind.
+Sweep manually:
+
+```bash
+rm -rf "$TMPDIR"/duckdb_gsa_*
+```
+
+Recent builds clean their own temp dir on shutdown and sweep stale
+orphans (>24 h) on startup; no manual action needed.
+
+## Roadmap & known limitations
+
+The list below distinguishes deferred work that has been **measured**
+(numbers from the optimization doc) from generic feature requests.
+PRs welcome on any of them; cross-link to the relevant section of
+`docs/optimization_history.md` in the PR description.
+
+### Renderer / front-end
+
+- Move Arrow `Vector.toArray()` off the main thread. At 322 M with the
+  category column it's ~1.8 s blocking — currently the longest
+  blocking JS phase per filter click.
+- Stream-decode the wire directly into pre-allocated typed arrays.
+  Skips the intermediate Arrow Table and lowers peak heap below 4 GB
+  so vanilla Chrome works at 322 M without `--js-flags`.
+- `EmbeddingViewImpl.svelte:368` should declare `let renderer = $state.raw(null)`
+  rather than `$state(null)`. The reactive Source proxy adds a duplicate
+  retainer chain visible in heap snapshots; ~50 MB overhead at long-
+  session steady state.
+- `device.lost` recovery UX. A Metal watchdog trip currently leaves the
+  canvas blank with no affordance. Surface a "GPU recovered — click to
+  re-render" banner.
+- GPU buffer pool: every filter click destroys ~3 GB of GPU buffers and
+  reallocates ~3 GB. A 2-slot ring per logical buffer would let the
+  new allocation reuse the old storage.
+
+### Loader / sidecar
+
+- Cold-init profile at 322 M (~12–15 s end-to-end). The split between
+  parquet footer scan and prewarm is unmeasured.
+- Clamp Electron's 16 GB V8 budget to `min(16 GB, totalmem * 0.5)` so
+  16 GB-RAM machines don't risk OS-level OOM-killer events.
+
+### Distros
+
+- DuckDB-WASM end-to-end at 200–300 M parquet (standalone web). Untested.
+- Selection (lasso / box) at 322 M. Untested; may stress the same
+  `toArray()` path.
+- Intel Mac desktop bundle. Currently no GitHub runner; users fall
+  back to the CLI path.
+
+### UX (from the prior backlog)
+
+- Disallow zoom-out below z = 0 (current shifting artefact).
+- Adapt density and point-radius ranges across zoom levels.
+- Basemap attribution.
+- Standalone `geospatial-atlas` PyPI package.
 
 ---
 
