@@ -454,6 +454,11 @@ def _launch_viewer(
         raise click.ClickException(
             f"Could not load the points dataset via the GIS fast path: {points_input}"
         )
+    # Expose the POI ``name`` column as the viewer's tooltip/label text. This is
+    # what powers the "Point Labels" toggle (a name above each dot) and the
+    # tooltip name; it is pure metadata and does not trigger any embedding.
+    cols_lower = {c.lower(): c for c in fast_connection.columns}
+    text_column = cols_lower.get("name")
     _run_fast_path(
         fast_connection=fast_connection,
         static=None,
@@ -465,6 +470,7 @@ def _launch_viewer(
         duckdb_uri="server",
         lines_glob=lines_glob,
         lines_min_zoom=lines_min_zoom,
+        text_column=text_column,
     )
 
 

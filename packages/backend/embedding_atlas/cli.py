@@ -380,6 +380,7 @@ def _run_fast_path(
     duckdb_uri: str,
     lines_glob: str | None = None,
     lines_min_zoom: float | None = None,
+    text_column: str | None = None,
 ):
     """Serve the pre-populated DuckDB connection via FastAPI+uvicorn.
 
@@ -433,7 +434,11 @@ def _run_fast_path(
         x=fast_connection.x_column,
         y=fast_connection.y_column,
         neighbors=None,
-        text=None,
+        # ``text_column`` only marks which column the viewer shows as
+        # tooltip/label text (``data.text``). Unlike the embedding ``--text``
+        # flag it does NOT trigger projection — the fast-path view already
+        # exposes every column, so this is pure metadata.
+        text=text_column,
         point_size=None,
         stop_words=None,
         labels=None,
