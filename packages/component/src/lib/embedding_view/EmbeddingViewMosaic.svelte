@@ -25,7 +25,7 @@
     predicateForRangeSelection,
     queryApproximateDensity,
   } from "./mosaic_client.js";
-  import type { DataPoint, DataPointID, LabelContent } from "./types.js";
+  import type { DataPoint, DataPointID, Label, LabelContent } from "./types.js";
   import {
     textSummarizerAdd,
     textSummarizerCreate,
@@ -213,7 +213,13 @@
     // Let Svelte track the dependencies. Include `bounds` and `precomputed`
     // so changing from null → set (or back) rebuilds the client with the
     // right SQL path.
-    let deps = { coordinator: coordinator, source: { table, x, y, category, survivor }, bounds, precomputed, viewportHint };
+    let deps = {
+      coordinator: coordinator,
+      source: { table, x, y, category, survivor },
+      bounds,
+      precomputed,
+      viewportHint,
+    };
 
     let client: { destroy: () => void } | null = null;
     let didDestroy = false;
@@ -858,6 +864,104 @@
     return output;
   }
 
+  // Per-point name labels. When ``config.showPointLabels`` is on and a ``text``
+  // column is available, fetch the names of the points currently within the
+  // viewport (capped) and render them directly above each dot in
+  // EmbeddingViewImpl — always visible, no collision solving.
+  //
+  // This is a real Mosaic client (``selection: filter``) so it re-queries
+  // automatically when the cross-filter changes — legend category selection,
+  // cluster filter, range selection — meaning the labels always match exactly
+  // the points the scatter is displaying. The viewport bbox is pushed from
+  // EmbeddingViewImpl (``onPointLabelsViewport``) and triggers a re-query on
+  // pan/zoom via ``requestQuery()``.
+  const DEFAULT_POINT_LABELS_MAX = 750;
+  let pointNameLabels = $state.raw<Label[] | null>(null);
+  let pointLabelsBbox: { xMin: number; xMax: number; yMin: number; yMax: number } | null = null;
+  let pointLabelsClient: MosaicClient | null = null;
+
+  function buildPointLabelsQuery(predicate: any): any {
+    if (text == null || pointLabelsBbox == null) {
+      return null;
+    }
+    let cap = config?.pointLabelsMaxCount ?? DEFAULT_POINT_LABELS_MAX;
+    let conditions: any[] = [
+      SQL.sql`${SQL.column(text)} IS NOT NULL AND LENGTH(TRIM(${SQL.column(text)}::VARCHAR)) > 0`,
+      SQL.isBetween(SQL.column(x), [pointLabelsBbox.xMin, pointLabelsBbox.xMax]),
+      SQL.isBetween(SQL.column(y), [pointLabelsBbox.yMin, pointLabelsBbox.yMax]),
+    ];
+    // Same cross-filter predicate the scatter obeys — labels track the visible
+    // points (e.g. a ``matched_candidate`` legend selection shows only those).
+    if (predicate != null && String(predicate).trim().length > 0) {
+      conditions.push(predicate);
+    }
+    return SQL.Query.from(table)
+      .select({ x: SQL.column(x), y: SQL.column(y), text: SQL.column(text) })
+      .where(SQL.and(...conditions))
+      .limit(cap);
+  }
+
+  function extractPointNameLabels(data: any): Label[] {
+    let xs = data.getChild("x").toArray();
+    let ys = data.getChild("y").toArray();
+    let ts = data.getChild("text").toArray();
+    let out: Label[] = [];
+    for (let i = 0; i < xs.length; i++) {
+      let content = ts[i];
+      if (content == null) {
+        continue;
+      }
+      let str = String(content);
+      if (str.length == 0) {
+        continue;
+      }
+      out.push({ x: xs[i], y: ys[i], content: str, level: 0 });
+    }
+    return out;
+  }
+
+  // Connect/disconnect the point-labels client to the active selection.
+  $effect(() => {
+    if (config?.showPointLabels !== true || text == null) {
+      pointNameLabels = null;
+      return;
+    }
+    let client = makeClient({
+      coordinator,
+      selection: filter ?? undefined,
+      query: (predicate) => buildPointLabelsQuery(predicate),
+      queryResult: (data: any) => {
+        pointNameLabels = extractPointNameLabels(data);
+      },
+    });
+    pointLabelsClient = client;
+    return () => {
+      coordinator.disconnect(client);
+      if (pointLabelsClient === client) {
+        pointLabelsClient = null;
+      }
+      pointNameLabels = null;
+    };
+  });
+
+  // Called by the embedding view when the viewport changes. Stores the bbox and
+  // re-runs the client query (null = point labels off / no viewport yet).
+  function setPointLabelsViewport(bbox: { xMin: number; xMax: number; yMin: number; yMax: number } | null) {
+    pointLabelsBbox = bbox;
+    if (bbox == null) {
+      if (pointNameLabels != null) {
+        pointNameLabels = null;
+      }
+      return;
+    }
+    pointLabelsClient?.requestQuery();
+  }
+
+  // The point-name labels shown above each dot when the toggle is on. Kept
+  // separate from ``labels`` (cluster labels) — they render through a dedicated
+  // always-visible path in EmbeddingViewImpl, not the collision solver.
+  let effectivePointLabels = $derived(config?.showPointLabels === true ? pointNameLabels : null);
+
   function measureImageSize(src: string): Promise<{ width: number; height: number }> {
     return new Promise((resolve) => {
       let img = new Image();
@@ -892,6 +996,8 @@
   querySelection={querySelection}
   queryClusterLabels={queryClusterLabels}
   labels={labels}
+  pointLabels={effectivePointLabels}
+  onPointLabelsViewport={setPointLabelsViewport}
   customTooltip={customTooltip}
   customOverlay={customOverlay}
   tooltip={effectiveTooltip}

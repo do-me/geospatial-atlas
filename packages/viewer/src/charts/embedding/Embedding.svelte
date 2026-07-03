@@ -346,6 +346,7 @@
       ...(spec.minimumDensity != null ? { minimumDensity: spec.minimumDensity } : {}),
       pointSize: spec.pointSize ?? 2,
       survivorRingWidth: spec.survivorRingWidth ?? 0.1,
+      showPointLabels: spec.showPointLabels ?? false,
       downsampleMaxPoints: spec.downsampleMaxPoints ?? defaultDownsampleMaxPoints,
       downsampleMaxPointsInteractive: spec.downsampleMaxPointsInteractive ?? defaultDownsampleMaxPointsInteractive,
     }}
@@ -369,8 +370,13 @@
     onViewportState={(v) => onStateChange({ viewport: v })}
     rangeSelectionValue={chartState.brush}
     onRangeSelection={(v) => onStateChange({ brush: v ?? undefined })}
-    tooltip={tooltip}
+    tooltip={spec.showPointLabels ? null : tooltip}
     onTooltip={(v) => {
+      // When Point Labels is on, the name is shown as a standalone label above
+      // each dot — suppress the hover popup so nothing else appears on hover.
+      if (spec.showPointLabels) {
+        return;
+      }
       tooltip = v;
     }}
     selection={selection}
@@ -509,6 +515,16 @@
                 step={0.05}
               />
               <Button label="Auto" onClick={() => onSpecChange({ survivorRingWidth: 0.1 })} />
+            </div>
+          {/if}
+          {#if spec.data.text != null}
+            <div class="flex items-center justify-between">
+              <div class="text-slate-500 dark:text-slate-400 select-none">Point Labels</div>
+              <Switch
+                label="Show"
+                value={spec.showPointLabels ?? false}
+                onChange={(v) => onSpecChange({ showPointLabels: v })}
+              />
             </div>
           {/if}
           {#if totalPointCount != null && totalPointCount > minDownsampleMaxPoints}

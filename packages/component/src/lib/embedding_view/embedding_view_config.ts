@@ -19,6 +19,18 @@ export interface EmbeddingViewConfig {
    * The ring extends outward beyond the point circle. Default 0.1. */
   survivorRingWidth?: number | null;
 
+  /** Show each point's name (the `text` column) as a text label placed above
+   * the dot. The names are collision-culled and revealed progressively as you
+   * zoom in, so denser areas surface more names at higher zoom. Only the most
+   * important `pointLabelsMaxCount` points are candidates. Default: false. */
+  showPointLabels?: boolean | null;
+
+  /** Maximum number of points that are candidates for name labels when
+   * `showPointLabels` is on. Points are taken in `importance` order (if an
+   * importance column is present) so the most significant names win.
+   * Default: 2000. */
+  pointLabelsMaxCount?: number | null;
+
   /** Generate labels automatically.
    * By default labels are generated automatically if the `labels` prop is not specified,
    * and a `text` column is specified in the Mosaic view,
