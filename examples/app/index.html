@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="./assets/icon-light-D_6pwR52.png" />
+    <title>Geospatial Atlas</title>
+    <style>
+      html,
+      body {
+        overscroll-behavior-x: none;
+      }
+    </style>
+    <script type="module">
+      import { loadDataFromUrl } from "./assets/datasets-c2ebf840.js";
+      window.EMBEDDING_ATLAS_CONFIG = { home: "file-viewer", loadDataFromUrl: loadDataFromUrl };
+    </script>
+    <script type="module" crossorigin src="./assets/index-Di7rp4xl.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-O4Ikt2Hx.css">
+  </head>
+  <body>
+    <div id="app" class="embedding-atlas-root"></div>
+  </body>
+</html>
