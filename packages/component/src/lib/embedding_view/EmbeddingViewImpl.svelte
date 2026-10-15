@@ -121,7 +121,7 @@
   import { pointDistance, throttleTooltip, type Point, type Rectangle, type ViewportState } from "../utils.js";
   import { Viewport } from "../viewport_utils.js";
   import { EmbeddingRenderer } from "../webgpu_renderer/renderer.js";
-  import { requestWebGPUDevice } from "../webgpu_renderer/utils.js";
+  import { isWebGPUAvailable, requestWebGPUDevice, waitForGPUQueue } from "../webgpu_renderer/utils.js";
   import { customComponentAction, customComponentProps } from "./custom_component_helper.js";
   import type { EmbeddingViewConfig } from "./embedding_view_config.js";
   import { layoutLabels, type LabelWithPlacement } from "./labels.js";
@@ -268,14 +268,25 @@
   // refreshes mid-gesture (see skipDownsampleCompute below) — re-compute
   // happens on gesture release once isInteracting flips false.
   let lastFullComputeAt = $state(0);
+  let isPanning = false;
   let interactionDecayTimer: ReturnType<typeof setTimeout> | null = null;
   function bumpInteraction() {
     isInteracting = true;
     if (interactionDecayTimer != null) clearTimeout(interactionDecayTimer);
     interactionDecayTimer = setTimeout(() => {
-      isInteracting = false;
+      // A held drag remains active even when input events arrive slowly.
+      if (!isPanning) isInteracting = false;
       interactionDecayTimer = null;
     }, 150);
+  }
+
+  function endPan() {
+    isPanning = false;
+    if (interactionDecayTimer != null) {
+      clearTimeout(interactionDecayTimer);
+      interactionDecayTimer = null;
+    }
+    isInteracting = false;
   }
 
   // Wheel-zoom suppression. Mid-wheel, every tick changes ``scale`` —
@@ -673,16 +684,15 @@
     // a half-populated f32 destination (Y still empty zeros → all
     // points collapse to the y-min line) or freshly allocated zero
     // memory (whole scatter at the bbox corner). The promise is a
-    // no-op for the WebGL fallback and for steady-state pan/zoom where
-    // no new packed buffers have arrived since the last render.
+    // no-op for steady-state pan/zoom where no packed buffers have changed.
     const unpackPromise = renderer.unpackInFlight;
     if (unpackPromise) {
       const renderToken = _renderToken;
       try {
         await unpackPromise;
-      } catch {
-        // Chain failures are surfaced inside the renderer; fall through
-        // to render whatever the f32 destinations currently hold.
+      } catch (error) {
+        console.error("Could not prepare GPU coordinates:", error);
+        return;
       }
       // Renderer may have been recreated mid-await (device.lost path).
       // The token bumps in the ``$effect(() => { ... })`` above; if it
@@ -691,6 +701,11 @@
       if (renderToken !== _renderToken || !renderer || !canvas) {
         return;
       }
+    }
+    // Multiple callers can await the same unpack before either submits.
+    if (_renderInFlight) {
+      _renderPending = true;
+      return;
     }
     // Only assign width/height when they actually change. Per HTML spec,
     // even same-value assignment resets the canvas bitmap, which on WebGPU
@@ -703,7 +718,8 @@
     if (canvas.style.width !== cssW) canvas.style.width = cssW;
     if (canvas.style.height !== cssH) canvas.style.height = cssH;
     const localCanvas = canvas;
-    const dev = (renderer as any).gpuDevice as GPUDevice | undefined;
+    const submittedRenderer = renderer;
+    const dev = renderer.gpuDevice;
     const t0 = performance.now();
     // Count must reflect whichever fill path is active. On the packed
     // (u32-direct) path ``props.x`` is the empty sentinel and the real
@@ -719,110 +735,83 @@
         console.log(`[atlas-stage] first-big-render-start ${t0.toFixed(0)} count=${count}`);
       }
     }
-    renderer.render();
-    // Backpressure: this render's submit is now in flight. Block
-    // subsequent renders until the GPU drains. WebGL fallback has no
-    // ``onSubmittedWorkDone`` — it pipelines implicitly through its own
-    // swap chain, so we leave ``_renderInFlight`` false.
-    if (dev) {
-      _renderInFlight = true;
-      const myToken = ++_renderToken;
-      let settled = false;
-      const finish = (reason: "drain" | "watchdog" | "rejected") => {
-        if (settled || myToken !== _renderToken) return;
-        settled = true;
-        clearTimeout(watchdog);
-        _renderInFlight = false;
-        if (reason === "watchdog") {
-          console.warn(
-            "[atlas] render backpressure watchdog fired — onSubmittedWorkDone() did not settle in 300 s. Likely device.lost or GPU process hang; force-resetting so subsequent renders can proceed.",
-          );
-        }
-        if (_renderPending) {
-          _renderPending = false;
-          setNeedsRender();
-        }
-      };
-      // 300 s (5 min) budget. The no-cap path draws every one of the
-      // 322 M eubucco points by chunking the instance draw into 81 ×
-      // 4 M-instance cmd buffers. Each cmd buffer is sized to fit
-      // Metal's 5 s per-buffer watchdog (~0.6 s wall on Apple GPU at
-      // world zoom). Total wall-clock for the whole render is
-      // typically 25-90 s, but a contended GPU process or a slow
-      // tail-pass can stretch it. The original 30 s budget assumed
-      // downsampled drawIndirect (~1 s); 120 s was a halfway bump.
-      // 5 min keeps us comfortably above any realistic worst case
-      // while still catching genuine device.lost / GPU-process hangs.
-      // Premature reset is the trigger for cascading kIOGPU timeouts:
-      // it queues a *second* render on top of the in-flight first
-      // one, doubling cmd-buffer load past the Metal 5 s ceiling.
-      const watchdog = setTimeout(() => finish("watchdog"), 300_000);
-      dev.queue.onSubmittedWorkDone().then(
-        () => finish("drain"),
-        () => finish("rejected"),
-      );
+    try {
+      renderer.render();
+    } catch (error) {
+      console.error("Could not render GPU frame:", error);
+      webGPUError = "Could not render the GPU frame. Reload this view if it does not recover.";
+      return;
     }
+    const gpuDone = waitForGPUQueue(dev);
+    _renderInFlight = true;
+    const myToken = ++_renderToken;
+    let settled = false;
+    const finish = (reason: "drain" | "watchdog" | "rejected") => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(watchdog);
+      if (myToken !== _renderToken) return;
+      _renderInFlight = false;
+      if (reason === "watchdog") {
+        console.warn(
+          "[atlas] render backpressure watchdog fired — onSubmittedWorkDone() did not settle in 300 s. Likely device.lost or GPU process hang; force-resetting so subsequent renders can proceed.",
+        );
+      }
+      if (_renderPending) {
+        _renderPending = false;
+        setNeedsRender();
+      }
+    };
+    const watchdog = setTimeout(() => finish("watchdog"), 300_000);
     // Always-on "first GPU frame on screen" signal. The viewer's
     // ``EmbeddingAtlas`` column-chart discovery polls
     // ``__atlasFirstBigRenderGpuLogged`` to decide when to mount the side
     // panel — gating it on perf mode meant the panel only appeared with
     // ``?perf=1`` (or after a 60 s safety net). One observer per render
     // until the flag flips, then this branch is dead.
-    if (dev && count > 0 && !(window as any).__atlasFirstBigRenderGpuLogged) {
-      dev.queue.onSubmittedWorkDone().then(() => {
-        const w: any = window as any;
-        if (!w.__atlasFirstBigRenderGpuLogged) {
-          w.__atlasFirstBigRenderGpuLogged = true;
-          if (perfOn && count > 1_000_000) {
-            const dur = performance.now() - t0;
-            console.log(
-              `[atlas-stage] first-big-render-gpu-done ${performance.now().toFixed(0)} took=${dur.toFixed(0)}ms`,
-            );
+    gpuDone.then(
+      () => {
+        finish("drain");
+        if (renderer !== submittedRenderer) return;
+        if (count > 0) consecutiveDeviceLosses = 0;
+        if (count > 0 && !(window as any).__atlasFirstBigRenderGpuLogged) {
+          const w: any = window as any;
+          if (!w.__atlasFirstBigRenderGpuLogged) {
+            w.__atlasFirstBigRenderGpuLogged = true;
+            if (perfOn && count > 1_000_000) {
+              const dur = performance.now() - t0;
+              console.log(
+                `[atlas-stage] first-big-render-gpu-done ${performance.now().toFixed(0)} took=${dur.toFixed(0)}ms`,
+              );
+            }
           }
         }
-      });
-    }
+        // Clear the old CSS-pan transform on the compositor frame that
+        // presents the completed draw, without clobbering a newer pan.
+        requestAnimationFrame(() => {
+          if (renderer === submittedRenderer && !isInteracting) {
+            localCanvas.style.transform = "";
+            bumpDbg("clearedViaGpuDone");
+          }
+        });
+      },
+      (error) => {
+        finish("rejected");
+        console.warn("[atlas-gpu] Frame did not complete:", error);
+        if (renderer === submittedRenderer) {
+          webGPUError = "The GPU frame did not complete. Reload this view if it does not recover.";
+        }
+      },
+    );
     if (perfOn) {
       const dt = performance.now() - t0;
       const cap = renderer.props.downsampleMaxPoints;
       const downsampled = cap != null && Number.isFinite(cap) && cap > 0 && count > cap;
       perfSetPointCount(count);
-      const whenGpuDone = dev ? dev.queue.onSubmittedWorkDone().then(() => performance.now() - t0) : undefined;
+      const whenGpuDone = gpuDone.then(() => performance.now() - t0);
       perfRecord({ cpuMs: dt, downsampled, whenGpuDone });
     }
-    // Clear the CSS-pan transform after the GPU has finished presenting
-    // the fresh frame — only then is it safe to drop the old translated
-    // bitmap. Clearing earlier causes a visible misalignment flash.
-    // Guarded by !isInteracting so we don't clobber a new in-flight pan
-    // that may have started before the prior GPU work finished.
     bumpDbg("renderCalls");
-    if (dev) {
-      // Defer the CSS-transform clear by one rAF after onSubmittedWorkDone.
-      // The rAF fires just BEFORE the next compositor paint, so when the
-      // new swap-chain texture and the cleared transform both get committed
-      // they land on the same paint cycle — a stale transform on new
-      // content would be a visible double-translate flash. Clearing
-      // straight from the microtask lets one paint cycle go by with the
-      // old texture plus cleared transform, which reads as a "snap back"
-      // to pre-drag position.
-      dev.queue.onSubmittedWorkDone().then(() => {
-        if (localCanvas && !isInteracting) {
-          requestAnimationFrame(() => {
-            if (localCanvas && !isInteracting) {
-              localCanvas.style.transform = "";
-              bumpDbg("clearedViaGpuDone");
-            }
-          });
-        }
-      });
-    } else if (!isInteracting) {
-      requestAnimationFrame(() => {
-        if (localCanvas && !isInteracting) {
-          localCanvas.style.transform = "";
-          bumpDbg("clearedViaGpuDone");
-        }
-      });
-    }
   }
 
   let _request: number | null = null;
@@ -848,13 +837,14 @@
   // pending, and the canvas stops updating. Three guards:
   //   1. ``_renderToken`` — late callbacks from a dead device are
   //      ignored (the token doesn't match anymore).
-  //   2. 30 s watchdog — force-reset if the Promise never settles.
+  //   2. 300 s watchdog — force-reset if the Promise never settles.
   //   3. ``$effect`` on ``renderer`` — when the device.lost handler
   //      recreates the renderer, bump the token and clear the flags
   //      so the new device starts with a clean slate.
   let _renderInFlight = false;
   let _renderPending = false;
   let _renderToken = 0;
+  let consecutiveDeviceLosses = 0;
   function setNeedsRender() {
     if (_request == null) {
       _request = requestAnimationFrame(render);
@@ -878,19 +868,50 @@
   });
 
   function setupWebGPURenderer(canvas: HTMLCanvasElement) {
-    async function createRenderer() {
-      let result = await requestWebGPUDevice();
+    let disposed = false;
+    let activeDevice: GPUDevice | null = null;
+    let generation = 0;
+
+    function destroyDevice(device: GPUDevice | null) {
+      if (!device) return;
+      try {
+        device.destroy();
+      } catch (error) {
+        console.warn("[atlas-gpu] Device cleanup failed:", error);
+      }
+    }
+
+    async function createRenderer(recovering = false) {
+      const currentGeneration = ++generation;
+      let result = null;
+      for (const delay of recovering ? [0, 250, 500, 1000, 2000, 4000] : [0]) {
+        if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+        if (disposed || currentGeneration !== generation) return;
+        result = await requestWebGPUDevice();
+        if (disposed || currentGeneration !== generation) {
+          destroyDevice(result?.device ?? null);
+          return;
+        }
+        if (result || !isWebGPUAvailable()) break;
+        webGPUError = "WebGPU is temporarily unavailable. Retrying...";
+      }
       if (result == null) {
         console.error("Could not get WebGPU device");
-        webGPUError = "WebGPU is unavailable. This view requires a browser with WebGPU support.";
+        webGPUError =
+          recovering && isWebGPUAvailable()
+            ? "Could not reconnect to the GPU after multiple attempts. Reload this view to retry."
+            : "WebGPU is unavailable. This view requires a browser with WebGPU support.";
         return;
       }
       const { device, useF16 } = result;
+      activeDevice = device;
 
       let context = canvas.getContext("webgpu");
       if (context == null) {
         console.error("Could not get WebGPU canvas context");
         webGPUError = "WebGPU is unavailable. This view requires a browser with WebGPU support.";
+        activeDevice = null;
+        destroyDevice(device);
         return;
       }
 
@@ -900,28 +921,61 @@
         console.error("WebGPU uncaptured error:", (event as GPUUncapturedErrorEvent).error);
       });
 
-      device.lost.then(async (info) => {
+      device.lost.then((info) => {
+        if (disposed || activeDevice !== device) return;
         console.info(`WebGPU device was lost: ${info.message}`);
-        if (info.reason != "destroyed") {
-          renderer?.destroy();
-          renderer = null;
+        activeDevice = null;
+        const previousRenderer = renderer;
+        renderer = null;
+        previousRenderer?.destroy();
+        try {
           context.unconfigure();
-          await createRenderer();
+        } catch (error) {
+          console.warn("[atlas-gpu] Lost canvas cleanup failed:", error);
+        }
+        if (info.reason != "destroyed") {
+          if (++consecutiveDeviceLosses > 3) {
+            webGPUError = "The GPU keeps disconnecting. Reload this view or reduce the rendering workload.";
+            return;
+          }
+          webGPUError = "The GPU connection was lost. Reconnecting...";
+          void createRenderer(true).catch(reportSetupError);
+        } else {
+          webGPUError = "The GPU device was closed. Reload this view to reconnect.";
         }
       });
 
       let format = navigator.gpu.getPreferredCanvasFormat();
 
-      context.configure({
-        device: device,
-        format: format,
-        alphaMode: "premultiplied",
-      });
-
-      renderer = new EmbeddingRenderer(context, device, format, pixelWidth, pixelHeight, useF16);
+      try {
+        context.configure({
+          device: device,
+          format: format,
+          alphaMode: "premultiplied",
+        });
+        renderer = new EmbeddingRenderer(context, device, format, pixelWidth, pixelHeight, useF16);
+        webGPUError = null;
+      } catch (error) {
+        if (activeDevice === device) activeDevice = null;
+        destroyDevice(device);
+        throw error;
+      }
     }
 
-    createRenderer();
+    function reportSetupError(error: unknown) {
+      console.error("Could not initialize WebGPU renderer:", error);
+      if (!disposed) webGPUError = "Could not initialize the GPU renderer. Reload this view to retry.";
+    }
+
+    void createRenderer().catch(reportSetupError);
+    return () => {
+      disposed = true;
+      generation++;
+      renderer?.destroy();
+      renderer = null;
+      destroyDevice(activeDevice);
+      activeDevice = null;
+    };
   }
 
   function syncViewportState(defaultViewportState: ViewportState | null) {
@@ -992,8 +1046,9 @@
     if (canvas == null) {
       return;
     }
+    const mountedCanvas = canvas;
     // Setup WebGPU renderer
-    setupWebGPURenderer(canvas);
+    const destroyRenderer = setupWebGPURenderer(canvas);
 
     // Override toDataURL. This is because we must submit the render commands before
     // calling toDataURL, to ensure the current image is populated with contents.
@@ -1002,11 +1057,19 @@
       render();
       return _toDataURL.apply(canvas, args);
     };
+    return () => {
+      mountedCanvas.toDataURL = _toDataURL;
+      destroyRenderer();
+    };
   });
 
   onDestroy(() => {
-    renderer?.destroy();
-    renderer = null;
+    endPan();
+    if (_request != null) cancelAnimationFrame(_request);
+    _request = null;
+    _renderToken++;
+    _renderInFlight = false;
+    _renderPending = false;
     if (map) {
       map.remove();
       map = undefined;
@@ -1115,6 +1178,7 @@
         let sy = isGis ? -sx : c0.y - c1.y;
         let x0 = resolvedViewportState.x;
         let y0 = resolvedViewportState.y;
+        isPanning = true;
         bumpInteraction();
         return {
           move: (e2: CursorValue) => {
@@ -1125,18 +1189,7 @@
               scale: resolvedViewportState.scale,
             });
           },
-          up: () => {
-            // With the CSS-pan fast path no GPU work is in flight during
-            // the gesture, so we can snap isInteracting false immediately
-            // — the next $effect.pre run does the full re-render at the
-            // release viewport and clears the canvas CSS transform in one
-            // frame. Skipping the decay makes the visual "settle" instant.
-            if (interactionDecayTimer != null) {
-              clearTimeout(interactionDecayTimer);
-              interactionDecayTimer = null;
-            }
-            isInteracting = false;
-          },
+          up: endPan,
         };
       }
     }
@@ -1355,6 +1408,8 @@
     element.addEventListener("wheel", () => {}, { passive: true });
   }
 </script>
+
+<svelte:window onblur={endPan} />
 
 <div style:width="{width}px" style:height="{height}px" style:position="relative" use:onWheelWorkaround>
   <div

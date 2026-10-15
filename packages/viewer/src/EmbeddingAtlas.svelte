@@ -39,6 +39,7 @@
     onPredicateChange,
     modelContext,
     cache,
+    highlight: highlightProp = null,
   }: EmbeddingAtlasProps = $props();
 
   // svelte-ignore state_referenced_locally
@@ -117,6 +118,11 @@
     if (chartTheme !== get(store.chartTheme)) {
       store.chartTheme.set(chartTheme ?? undefined);
     }
+  });
+
+  // Sync the external highlight prop with the internal highlight store.
+  $effect.pre(() => {
+    store.chartContext.highlight.set(highlightProp != null && highlightProp.length > 0 ? highlightProp : null);
   });
 
   let mcpStatus = $state.raw<string | undefined>(undefined);

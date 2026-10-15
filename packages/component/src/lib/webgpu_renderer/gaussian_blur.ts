@@ -1,18 +1,19 @@
 // Copyright (c) 2025 Apple Inc. Licensed under MIT License.
 
-import type { Dataflow, Node } from "../dataflow.js";
+import type { Dataflow, DataflowNode } from "@embedding-atlas/utils";
+
 import type { BindGroups } from "./bind_groups.js";
 import { gaussianBlurPipelineConstants, resolveWgConfig } from "./wg_config.js";
 
 export function makeGaussianBlurCommand(
   df: Dataflow,
-  device: Node<GPUDevice>,
-  module: Node<GPUShaderModule>,
+  device: DataflowNode<GPUDevice>,
+  module: DataflowNode<GPUShaderModule>,
   bindGroups: BindGroups,
-  width: Node<number>,
-  height: Node<number>,
-  categoryCount: Node<number>,
-): Node<(encoder: GPUCommandEncoder) => void> {
+  width: DataflowNode<number>,
+  height: DataflowNode<number>,
+  categoryCount: DataflowNode<number>,
+): DataflowNode<(encoder: GPUCommandEncoder) => void> {
   const wgConfig = resolveWgConfig();
   const constants = gaussianBlurPipelineConstants(wgConfig);
   const wg = wgConfig.gaussianBlur;

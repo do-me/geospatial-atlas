@@ -61,7 +61,7 @@ export default defineConfig({
       // otherwise so this project is safe to leave in the default list.
       name: "perf-chrome",
       testMatch:
-        /(perf-75m|perf-cold-load|pan-visibility|pan-screencast|wg-sweep|europe-300m|gpu-soak|reload-soak|pan-release-soak|pan-rapid-release|tooltip-latency|pan-zoom-out|u32-precision|render-coverage)\.spec\.ts$/,
+        /(perf-75m|perf-cold-load|pan-visibility|pan-screencast|wg-sweep|europe-300m|gpu-soak|gpu-device-loss|reload-soak|pan-release-soak|pan-rapid-release|tooltip-latency|pan-zoom-out|u32-precision|render-coverage)\.spec\.ts$/,
       timeout: 20 * 60 * 1000,
       use: {
         channel: "chrome",

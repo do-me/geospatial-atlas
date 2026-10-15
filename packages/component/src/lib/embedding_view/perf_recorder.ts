@@ -99,9 +99,12 @@ export function record(rec: FrameRecord): void {
   s.totalFrames++;
   if (rec.downsampled) s.downsampledFrames++;
   if (rec.whenGpuDone) {
-    rec.whenGpuDone.then((gpuMs) => {
-      s.gpuSamples[slot] = gpuMs;
-    });
+    rec.whenGpuDone.then(
+      (gpuMs) => {
+        s.gpuSamples[slot] = gpuMs;
+      },
+      (error) => console.warn("[atlas-perf] GPU frame did not complete:", error),
+    );
   }
 }
 

@@ -37,8 +37,9 @@
 // Y source allocates; that holds peak at 3.86 GB (same as the unsequenced
 // u16 path used to). See ``EmbeddingRenderer.maybeRunUnpack``.
 
-import type { Dataflow, Node } from "../dataflow.js";
+import type { Dataflow, DataflowNode } from "@embedding-atlas/utils";
 
+import { destroyGPUResource, waitForGPUQueue } from "./utils.js";
 import unpackShaderCode from "./unpack.wgsl?raw";
 
 /** Bounds for u32 → f32 unpack: ``f32 = min + u32 * (max - min) / (2³² − 1)``. */
@@ -63,18 +64,18 @@ const U32_MAX = 4_294_967_295;
 
 /** Compile the unpack shader module. Cheap (<1 ms) and idempotent — the
  *  dataflow caches the result against ``device``. */
-function makeUnpackModule(df: Dataflow, device: Node<GPUDevice>): Node<GPUShaderModule> {
+function makeUnpackModule(df: Dataflow, device: DataflowNode<GPUDevice>): DataflowNode<GPUShaderModule> {
   return df.derive([device], (device) => device.createShaderModule({ code: unpackShaderCode }));
 }
 
 /** Compile the unpack compute pipeline + bind group layout. The pipeline
  *  is reused across both axes and across data updates. */
 export interface UnpackPipeline {
-  pipeline: Node<GPUComputePipeline>;
-  bindGroupLayout: Node<GPUBindGroupLayout>;
+  pipeline: DataflowNode<GPUComputePipeline>;
+  bindGroupLayout: DataflowNode<GPUBindGroupLayout>;
 }
 
-export function makeUnpackPipeline(df: Dataflow, device: Node<GPUDevice>): UnpackPipeline {
+export function makeUnpackPipeline(df: Dataflow, device: DataflowNode<GPUDevice>): UnpackPipeline {
   const module = makeUnpackModule(df, device);
   const bindGroupLayout = df.derive([device], (device) =>
     device.createBindGroupLayout({
@@ -183,32 +184,29 @@ export async function runUnpack(
   scratchView.setFloat32(4, bounds.min, true);
   scratchView.setFloat32(8, scale, true);
 
-  for (let chunk = 0; chunk < numChunks; chunk++) {
-    const offsetY = chunk * chunkSizeY;
-    const remaining = Math.min(chunkSizeY, workgroupsY - offsetY);
-    if (remaining <= 0) break;
+  try {
+    for (let chunk = 0; chunk < numChunks; chunk++) {
+      const offsetY = chunk * chunkSizeY;
+      const remaining = Math.min(chunkSizeY, workgroupsY - offsetY);
+      if (remaining <= 0) break;
 
-    if (chunk > 0) {
-      // First chunk's uniform was already populated via mappedAtCreation.
-      scratchView.setUint32(12, offsetY, true);
-      device.queue.writeBuffer(uniformBuffer, 0, uniformScratch);
+      if (chunk > 0) {
+        // First chunk's uniform was already populated via mappedAtCreation.
+        scratchView.setUint32(12, offsetY, true);
+        device.queue.writeBuffer(uniformBuffer, 0, uniformScratch);
+      }
+
+      const encoder = device.createCommandEncoder();
+      const pass = encoder.beginComputePass();
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, bindGroup);
+      pass.dispatchWorkgroups(workgroupsX, remaining);
+      pass.end();
+      device.queue.submit([encoder.finish()]);
     }
 
-    const encoder = device.createCommandEncoder();
-    const pass = encoder.beginComputePass();
-    pass.setPipeline(pipeline);
-    pass.setBindGroup(0, bindGroup);
-    pass.dispatchWorkgroups(workgroupsX, remaining);
-    pass.end();
-    device.queue.submit([encoder.finish()]);
+    await waitForGPUQueue(device);
+  } finally {
+    await Promise.all([destroyGPUResource(device, u32Buffer), destroyGPUResource(device, uniformBuffer)]);
   }
-
-  // Defer-destroy: the in-flight dispatches still reference both buffers
-  // until every submit completes. ``onSubmittedWorkDone`` resolves once
-  // the queue drains — destroying earlier triggers the
-  // ``MTLDevice``-poisoning fault that ``utils.ts:gpuBuffer`` already
-  // works around for the persistent f32 destinations.
-  await device.queue.onSubmittedWorkDone();
-  u32Buffer.destroy();
-  uniformBuffer.destroy();
 }

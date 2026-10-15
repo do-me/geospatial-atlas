@@ -1,18 +1,19 @@
 // Copyright (c) 2025 Apple Inc. Licensed under MIT License.
 
-import type { Dataflow, Node } from "../dataflow.js";
+import type { Dataflow, DataflowNode } from "@embedding-atlas/utils";
+
 import type { BindGroups } from "./bind_groups.js";
 import type { AuxiliaryResources, DataBuffers } from "./renderer.js";
 import { accumulatePipelineConstants, resolveWgConfig } from "./wg_config.js";
 
 export function makeAccumulateCommand(
   df: Dataflow,
-  device: Node<GPUDevice>,
-  module: Node<GPUShaderModule>,
+  device: DataflowNode<GPUDevice>,
+  module: DataflowNode<GPUShaderModule>,
   bindGroups: BindGroups,
   dataBuffers: DataBuffers,
   auxiliaryResources: AuxiliaryResources,
-): Node<(encoder: GPUCommandEncoder) => void> {
+): DataflowNode<(encoder: GPUCommandEncoder) => void> {
   const wgConfig = resolveWgConfig();
   const constants = accumulatePipelineConstants(wgConfig);
   // Host-side dispatch keeps step with shader's `id.y * ACCUMULATE_STRIDE + id.x`.

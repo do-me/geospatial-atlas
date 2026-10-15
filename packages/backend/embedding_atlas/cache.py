@@ -31,16 +31,17 @@ Example:
 """
 
 import base64
+import functools
 import hashlib
 import hmac
 import json
 import logging
 import secrets
 import struct
-from functools import lru_cache
+from collections.abc import Callable
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
-from typing import IO, Any, Callable
+from typing import IO, Any
 
 import numpy as np
 from cryptography.hazmat.primitives import hashes
@@ -151,7 +152,7 @@ def file_cache_set(
     with open(cache_path_tmp, "wb") as file:
         file.write(encrypted_data)
 
-    cache_path_tmp.rename(cache_path)
+    cache_path_tmp.replace(cache_path)
 
 
 def file_cache_value(
@@ -232,7 +233,7 @@ def file_cache_value(
         with open(cache_path_tmp, "wb") as file:
             file.write(encrypted_data)
 
-        cache_path_tmp.rename(cache_path)
+        cache_path_tmp.replace(cache_path)
     except Exception:
         logger.debug("Cache write failed for key %s", cache_key, exc_info=True)
 
@@ -267,7 +268,7 @@ async def async_file_cache_value(
 
     if cache_path.exists():
         try:
-            with open(cache_path, "rb") as file:
+            with open(cache_path, "rb") as file:  # noqa: ASYNC230
                 data = _decrypt_data(file.read(), key=encryption_key)
 
             result = deserializer(BytesIO(data))
@@ -290,10 +291,10 @@ async def async_file_cache_value(
         serializer(value, buffer)
         encrypted_data = _encrypt_data(buffer.getvalue(), key=encryption_key)
 
-        with open(cache_path_tmp, "wb") as file:
+        with open(cache_path_tmp, "wb") as file:  # noqa: ASYNC230
             file.write(encrypted_data)
 
-        cache_path_tmp.rename(cache_path)
+        cache_path_tmp.replace(cache_path)
     except Exception:
         logger.debug("Cache write failed for key %s", cache_key, exc_info=True)
 
@@ -307,7 +308,7 @@ def _resolve_cache_root(cache_root: str | Path | None = None) -> Path:
         return Path(cache_root).resolve()
 
 
-@lru_cache(maxsize=None)
+@functools.cache
 def _get_constants(cache_root: Path) -> dict[str, bytes]:
     cache_root.mkdir(parents=True, exist_ok=True)
     constants_path = cache_root / "cache_constants.json"
@@ -433,6 +434,8 @@ def _update_hash_with_value(update_func: Callable[[bytes], None], *value: Any):
             preamble(b"np.ndarray", len(prefix_bytes) + len(data_bytes))
             update_func(prefix_bytes)
             update_func(data_bytes)
+        elif isinstance(v, np.generic):
+            emit_value(v.item())
         elif isinstance(v, list):
             preamble(b"list", len(v))
             for item in v:

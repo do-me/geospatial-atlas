@@ -18,6 +18,12 @@ export { defaultCategoryColors } from "./colors.js";
 export { streamingRestConnector, type StreamingRestConnectorOptions } from "./streaming_rest_connector.js";
 export { registerZstdCodec } from "./ipc_codec.js";
 
+export { ParallelCoordinatesView, type ParallelCoordinatesViewProps } from "./parallel_coordinates_view/api.js";
+export type {
+  ParallelCoordinatesViewTheme,
+  ParallelCoordinatesViewThemeConfig,
+} from "./parallel_coordinates_view/theme.js";
+
 export type { EmbeddingViewConfig } from "./embedding_view/embedding_view_config.js";
 export type { EmbeddingViewTheme } from "./embedding_view/theme.js";
 export type {

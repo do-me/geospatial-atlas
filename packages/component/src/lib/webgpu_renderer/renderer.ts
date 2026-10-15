@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Apple Inc. Licensed under MIT License.
 
+import { Dataflow, DataflowNode, DataflowValue } from "@embedding-atlas/utils";
+
 import { defaultCategoryColors, parseColorNormalizedRgb } from "../colors.js";
-import { Dataflow, Node, ValueNode } from "../dataflow.js";
 import {
   matrix3_identity,
   matrix3_inverse,
@@ -23,6 +24,7 @@ import {
   makeDrawPointsCommand,
   makeDrawPointsCompactedCommand,
   makeDrawPointsDownsampledCommand,
+  pointDrawChunkSize,
 } from "./draw_points.js";
 import { makeGammaCorrectionCommand } from "./gamma_correction.js";
 import { makeGaussianBlurCommand } from "./gaussian_blur.js";
@@ -127,13 +129,13 @@ export class EmbeddingRenderer {
 
   private viewport: Viewport;
   private df: Dataflow;
-  private device: Node<GPUDevice>;
-  private module: Node<GPUShaderModule>;
+  private device: DataflowNode<GPUDevice>;
+  private module: DataflowNode<GPUShaderModule>;
   private uniforms: ModuleUniforms;
   private context: GPUCanvasContext;
   private renderInputs: RenderInputs;
   private dataBuffers: DataBuffers;
-  private renderer: Node<(props: EmbeddingRendererProps, textureView: GPUTextureView) => void>;
+  private renderer: DataflowNode<(props: EmbeddingRendererProps, textureView: GPUTextureView) => void>;
   /** GPU-side u32 unpack pipeline (compute pipeline + bind-group layout
    *  only — the per-dispatch u32 source + uniform buffers are allocated
    *  ephemerally inside ``runUnpack`` and defer-destroyed). The downstream
@@ -488,43 +490,43 @@ export class EmbeddingRenderer {
 }
 
 export interface RenderInputs {
-  mode: ValueNode<RenderMode>;
-  colorScheme: ValueNode<"light" | "dark">;
+  mode: DataflowValue<RenderMode>;
+  colorScheme: DataflowValue<"light" | "dark">;
   /** Canonical point count — drives storage-buffer sizing regardless of
    *  whether the active fill path is f32 (``xData``) or packed u32
    *  (``setProps`` runs the unpack compute pass). */
-  count: ValueNode<number>;
-  xData: ValueNode<Float32Array<ArrayBuffer>>;
-  yData: ValueNode<Float32Array<ArrayBuffer>>;
-  categoryData: ValueNode<Uint8Array<ArrayBuffer> | null>;
-  categoryCount: ValueNode<number>;
-  categoryColors: ValueNode<string[] | null>;
-  pointSize: ValueNode<number>;
-  densityBandwidth: ValueNode<number>;
-  matrix: ValueNode<Matrix3>;
-  width: ValueNode<number>;
-  height: ValueNode<number>;
-  downsampleMaxPoints: ValueNode<number | null>;
-  downsampleDensityWeight: ValueNode<number>;
+  count: DataflowValue<number>;
+  xData: DataflowValue<Float32Array<ArrayBuffer>>;
+  yData: DataflowValue<Float32Array<ArrayBuffer>>;
+  categoryData: DataflowValue<Uint8Array<ArrayBuffer> | null>;
+  categoryCount: DataflowValue<number>;
+  categoryColors: DataflowValue<string[] | null>;
+  pointSize: DataflowValue<number>;
+  densityBandwidth: DataflowValue<number>;
+  matrix: DataflowValue<Matrix3>;
+  width: DataflowValue<number>;
+  height: DataflowValue<number>;
+  downsampleMaxPoints: DataflowValue<number | null>;
+  downsampleDensityWeight: DataflowValue<number>;
 }
 
 export interface DataBuffers {
-  x: Node<GPUBuffer>;
-  y: Node<GPUBuffer>;
-  category: Node<GPUBuffer | null>;
-  count: Node<number>;
+  x: DataflowNode<GPUBuffer>;
+  y: DataflowNode<GPUBuffer>;
+  category: DataflowNode<GPUBuffer | null>;
+  count: DataflowNode<number>;
 }
 
 export interface AuxiliaryResources {
-  colorTexture: Node<GPUTexture>;
+  colorTexture: DataflowNode<GPUTexture>;
   colorTextureFormat: GPUTextureFormat;
-  alphaTexture: Node<GPUTexture>;
+  alphaTexture: DataflowNode<GPUTexture>;
   alphaTextureFormat: GPUTextureFormat;
-  countBuffer: Node<GPUBuffer>;
-  blurBuffer: Node<GPUBuffer>;
+  countBuffer: DataflowNode<GPUBuffer>;
+  blurBuffer: DataflowNode<GPUBuffer>;
 }
 
-function makeDataBuffers(df: Dataflow, device: Node<GPUDevice>, inputs: RenderInputs): DataBuffers {
+function makeDataBuffers(df: Dataflow, device: DataflowNode<GPUDevice>, inputs: RenderInputs): DataBuffers {
   let usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
   // ``inputs.count`` is the renderer-set canonical count. In the f32
   // fill path it equals ``xData.length`` (set in ``setProps``); in the
@@ -551,12 +553,12 @@ function makeDataBuffers(df: Dataflow, device: Node<GPUDevice>, inputs: RenderIn
 
 export function makeAuxiliaryResources(
   df: Dataflow,
-  device: Node<GPUDevice>,
-  framebufferWidth: Node<number>,
-  framebufferHeight: Node<number>,
-  densityWidth: Node<number>,
-  densityHeight: Node<number>,
-  categoryCount: Node<number>,
+  device: DataflowNode<GPUDevice>,
+  framebufferWidth: DataflowNode<number>,
+  framebufferHeight: DataflowNode<number>,
+  densityWidth: DataflowNode<number>,
+  densityHeight: DataflowNode<number>,
+  categoryCount: DataflowNode<number>,
   useF16: boolean = true,
 ): AuxiliaryResources {
   let colorTextureFormat: GPUTextureFormat = "rgba16float";
@@ -599,14 +601,14 @@ export function makeAuxiliaryResources(
 
 function makeRenderCommand(
   df: Dataflow,
-  device: Node<GPUDevice>,
-  module: Node<GPUShaderModule>,
+  device: DataflowNode<GPUDevice>,
+  module: DataflowNode<GPUShaderModule>,
   uniforms: ModuleUniforms,
   format: GPUTextureFormat,
   inputs: RenderInputs,
   dataBuffers: DataBuffers,
   useF16: boolean = true,
-): Node<(props: EmbeddingRendererProps, textureView: GPUTextureView) => void> {
+): DataflowNode<(props: EmbeddingRendererProps, textureView: GPUTextureView) => void> {
   const densityPixelRatio = 4;
   let safeMargin = df.derive([inputs.densityBandwidth], (r: number) => Math.ceil(r * 3) + 1);
   let fbWidth = df.derive([inputs.width, safeMargin], (x: number, safeMargin: number) => x + safeMargin * 2);
@@ -765,13 +767,8 @@ function makeRenderCommand(
         // (a 322 M Europe-wide dataset rendered with a 50 M density cap
         // showed only Germany/Austria/CZ/Finland; UK/France/Spain/Italy
         // got dropped because density_sample favoured the densest areas).
-        // The chunked drawPoints path below splits the instance draw
-        // into 16 M-sized cmd buffers so each fits Metal's 5 s wall-clock
-        // watchdog, and ``onSubmittedWorkDone`` is awaited per submit so
-        // the 30 s backpressure timeout never trips. Cold init + each
-        // pan re-render both go through this path; users explicitly
-        // accept the longer per-frame budget in exchange for a complete
-        // map.
+        // Split the draw into pixel-area-bounded command buffers to avoid
+        // Metal's watchdog without dropping points or changing their size.
         const effectiveMaxPoints = userMaxPoints;
         const useDownsampling = effectiveMaxPoints !== null && count > effectiveMaxPoints;
 
@@ -824,33 +821,10 @@ function makeRenderCommand(
           gammaCorrection(drawEncoder, textureView);
           device.queue.submit([drawEncoder.finish()]);
         } else {
-          // Chunked instance draw. ``pass.draw(4, count)`` for the
-          // ``downsampleMaxPoints = "All"`` case at 322 M instances tries
-          // to push 1.3 B vertex shader runs through one MTLCommandBuffer
-          // — easily exceeds Metal's 5 s wall-clock watchdog and
-          // ``onSubmittedWorkDone()`` never resolves. Splitting the draw
-          // into ``DRAW_CHUNK_INSTANCES``-sized cmd buffers keeps every
-          // cmd buffer under the watchdog while still drawing every
-          // point. Only the first chunk clears the color/alpha
-          // attachments — subsequent chunks ``load`` and additively
-          // blend onto the partial buffer.
-          //
-          // 1 M instances chosen empirically: 16 M / 4 M / 2 M each
-          // tripped Metal's 5 s watchdog at 322 M when the renderer
-          // shared the box with a heavyweight sidecar (DuckDB at
-          // 50 + GB) and a parallel column-chart-discovery batch
-          // pushed one cmd buffer past 5 s of GPU wall. 2 M nominally
-          // had 16× headroom but it was not enough under combined
-          // CPU/RAM/GPU contention: a single dense world-view chunk
-          // could see fragment overdraw + paging slowdowns multiply
-          // execution time well beyond the empirical mean. 1 M doubles
-          // headroom (32×) at the cost of 322 chunks at 322 M; encoder
-          // setup is microseconds-per-chunk so this adds ~ tens of ms
-          // of CPU overhead — invisible against the multi-second GPU
-          // wall it protects. Pan re-renders at country/city zoom
-          // still early-exit most VS runs via the bounds check and
-          // complete in a few s regardless of chunk count.
-          const DRAW_CHUNK_INSTANCES = 1_000_000;
+          // Only the first chunk clears; later chunks additively blend.
+          // A fixed instance count is unsafe when large points overlap
+          // at world zoom, especially on high-DPI displays.
+          const DRAW_CHUNK_INSTANCES = pointDrawChunkSize(props.pointSize);
           const totalChunks = count > 0 ? Math.max(1, Math.ceil(count / DRAW_CHUNK_INSTANCES)) : 1;
           if (count > 0) {
             for (let chunk = 0; chunk < totalChunks; chunk++) {
@@ -887,15 +861,15 @@ function makeRenderCommand(
 
 function makeDensityMapCommand(
   df: Dataflow,
-  device: Node<GPUDevice>,
-  module: Node<GPUShaderModule>,
+  device: DataflowNode<GPUDevice>,
+  module: DataflowNode<GPUShaderModule>,
   uniforms: ModuleUniforms,
-  width: Node<number>,
-  height: Node<number>,
-  radius: Node<number>,
-  matrix: Node<Matrix3>,
+  width: DataflowNode<number>,
+  height: DataflowNode<number>,
+  radius: DataflowNode<number>,
+  matrix: DataflowNode<Matrix3>,
   dataBuffers: DataBuffers,
-): Node<() => Promise<Float32Array>> {
+): DataflowNode<() => Promise<Float32Array>> {
   let auxiliaryResources = makeAuxiliaryResources(df, device, width, height, width, height, df.value(1));
   let bindGroups = makeBindGroups(df, device, uniforms.buffer, dataBuffers, auxiliaryResources);
   let accumulate = makeAccumulateCommand(df, device, module, bindGroups, dataBuffers, auxiliaryResources);

@@ -1,9 +1,19 @@
 // Copyright (c) 2025 Apple Inc. Licensed under MIT License.
 
-import type { Dataflow, Node } from "../dataflow.js";
+import type { Dataflow, DataflowNode } from "@embedding-atlas/utils";
+
 import type { BindGroups } from "./bind_groups.js";
 import type { DownsampleResources } from "./downsample.js";
 import type { AuxiliaryResources, DataBuffers } from "./renderer.js";
+
+export function pointDrawChunkSize(pointSize: number): number {
+  if (!Number.isFinite(pointSize)) {
+    throw new RangeError("GPU point size must be finite");
+  }
+  // Fragment overdraw grows with the square of the radius in device pixels.
+  // Keep the tested million-point budget at <= 4px, including Retina scaling.
+  return Math.max(1, Math.floor(16_000_000 / Math.max(4, pointSize) ** 2));
+}
 
 /**
  * Per-chunk callable returned by ``makeDrawPointsCommand``. Caller
@@ -20,12 +30,12 @@ export type DrawPointsChunkFn = (
 
 export function makeDrawPointsCommand(
   df: Dataflow,
-  device: Node<GPUDevice>,
-  module: Node<GPUShaderModule>,
+  device: DataflowNode<GPUDevice>,
+  module: DataflowNode<GPUShaderModule>,
   bindGroups: BindGroups,
   dataBuffers: DataBuffers,
   auxiliaryResources: AuxiliaryResources,
-): Node<DrawPointsChunkFn> {
+): DataflowNode<DrawPointsChunkFn> {
   const pipeline = df.derive([device, module, bindGroups.layouts], (device, module, layouts) =>
     device.createRenderPipeline({
       layout: device.createPipelineLayout({ bindGroupLayouts: [layouts.group0, layouts.group1] }),
@@ -83,12 +93,12 @@ export function makeDrawPointsCommand(
  */
 export function makeDrawPointsCompactedCommand(
   df: Dataflow,
-  device: Node<GPUDevice>,
-  module: Node<GPUShaderModule>,
+  device: DataflowNode<GPUDevice>,
+  module: DataflowNode<GPUShaderModule>,
   bindGroups: BindGroups,
   downsampleResources: DownsampleResources,
   auxiliaryResources: AuxiliaryResources,
-): Node<(encoder: GPUCommandEncoder) => void> {
+): DataflowNode<(encoder: GPUCommandEncoder) => void> {
   const pipeline = df.derive(
     [device, module, bindGroups.layouts, downsampleResources.compactedVertexBindGroupLayout],
     (device, module, layouts, group2Layout) =>
@@ -150,12 +160,12 @@ export function makeDrawPointsCompactedCommand(
  */
 export function makeDrawPointsDownsampledCommand(
   df: Dataflow,
-  device: Node<GPUDevice>,
-  module: Node<GPUShaderModule>,
+  device: DataflowNode<GPUDevice>,
+  module: DataflowNode<GPUShaderModule>,
   bindGroups: BindGroups,
   downsampleResources: DownsampleResources,
   auxiliaryResources: AuxiliaryResources,
-): Node<(encoder: GPUCommandEncoder, count: number) => void> {
+): DataflowNode<(encoder: GPUCommandEncoder, count: number) => void> {
   const pipeline = df.derive(
     [device, module, bindGroups.layouts, downsampleResources.vertexBindGroupLayout],
     (device, module, layouts, group5Layout) =>
