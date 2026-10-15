@@ -24,6 +24,7 @@ import {
   makeDrawPointsCommand,
   makeDrawPointsCompactedCommand,
   makeDrawPointsDownsampledCommand,
+  pointDrawChunkSize,
 } from "./draw_points.js";
 import { makeGammaCorrectionCommand } from "./gamma_correction.js";
 import { makeGaussianBlurCommand } from "./gaussian_blur.js";
@@ -766,13 +767,8 @@ function makeRenderCommand(
         // (a 322 M Europe-wide dataset rendered with a 50 M density cap
         // showed only Germany/Austria/CZ/Finland; UK/France/Spain/Italy
         // got dropped because density_sample favoured the densest areas).
-        // The chunked drawPoints path below splits the instance draw
-        // into 16 M-sized cmd buffers so each fits Metal's 5 s wall-clock
-        // watchdog, and ``onSubmittedWorkDone`` is awaited per submit so
-        // the 30 s backpressure timeout never trips. Cold init + each
-        // pan re-render both go through this path; users explicitly
-        // accept the longer per-frame budget in exchange for a complete
-        // map.
+        // Split the draw into pixel-area-bounded command buffers to avoid
+        // Metal's watchdog without dropping points or changing their size.
         const effectiveMaxPoints = userMaxPoints;
         const useDownsampling = effectiveMaxPoints !== null && count > effectiveMaxPoints;
 
@@ -825,33 +821,10 @@ function makeRenderCommand(
           gammaCorrection(drawEncoder, textureView);
           device.queue.submit([drawEncoder.finish()]);
         } else {
-          // Chunked instance draw. ``pass.draw(4, count)`` for the
-          // ``downsampleMaxPoints = "All"`` case at 322 M instances tries
-          // to push 1.3 B vertex shader runs through one MTLCommandBuffer
-          // — easily exceeds Metal's 5 s wall-clock watchdog and
-          // ``onSubmittedWorkDone()`` never resolves. Splitting the draw
-          // into ``DRAW_CHUNK_INSTANCES``-sized cmd buffers keeps every
-          // cmd buffer under the watchdog while still drawing every
-          // point. Only the first chunk clears the color/alpha
-          // attachments — subsequent chunks ``load`` and additively
-          // blend onto the partial buffer.
-          //
-          // 1 M instances chosen empirically: 16 M / 4 M / 2 M each
-          // tripped Metal's 5 s watchdog at 322 M when the renderer
-          // shared the box with a heavyweight sidecar (DuckDB at
-          // 50 + GB) and a parallel column-chart-discovery batch
-          // pushed one cmd buffer past 5 s of GPU wall. 2 M nominally
-          // had 16× headroom but it was not enough under combined
-          // CPU/RAM/GPU contention: a single dense world-view chunk
-          // could see fragment overdraw + paging slowdowns multiply
-          // execution time well beyond the empirical mean. 1 M doubles
-          // headroom (32×) at the cost of 322 chunks at 322 M; encoder
-          // setup is microseconds-per-chunk so this adds ~ tens of ms
-          // of CPU overhead — invisible against the multi-second GPU
-          // wall it protects. Pan re-renders at country/city zoom
-          // still early-exit most VS runs via the bounds check and
-          // complete in a few s regardless of chunk count.
-          const DRAW_CHUNK_INSTANCES = 1_000_000;
+          // Only the first chunk clears; later chunks additively blend.
+          // A fixed instance count is unsafe when large points overlap
+          // at world zoom, especially on high-DPI displays.
+          const DRAW_CHUNK_INSTANCES = pointDrawChunkSize(props.pointSize);
           const totalChunks = count > 0 ? Math.max(1, Math.ceil(count / DRAW_CHUNK_INSTANCES)) : 1;
           if (count > 0) {
             for (let chunk = 0; chunk < totalChunks; chunk++) {

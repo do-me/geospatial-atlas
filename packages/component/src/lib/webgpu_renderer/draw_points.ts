@@ -6,6 +6,15 @@ import type { BindGroups } from "./bind_groups.js";
 import type { DownsampleResources } from "./downsample.js";
 import type { AuxiliaryResources, DataBuffers } from "./renderer.js";
 
+export function pointDrawChunkSize(pointSize: number): number {
+  if (!Number.isFinite(pointSize)) {
+    throw new RangeError("GPU point size must be finite");
+  }
+  // Fragment overdraw grows with the square of the radius in device pixels.
+  // Keep the tested million-point budget at <= 4px, including Retina scaling.
+  return Math.max(1, Math.floor(16_000_000 / Math.max(4, pointSize) ** 2));
+}
+
 /**
  * Per-chunk callable returned by ``makeDrawPointsCommand``. Caller
  * invokes once per slice, controlling whether the slice should clear

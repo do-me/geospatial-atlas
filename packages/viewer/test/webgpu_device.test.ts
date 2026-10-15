@@ -64,4 +64,12 @@ describe("requestWebGPUDevice", () => {
     vi.stubGlobal("navigator", undefined);
     await expect(requestWebGPUDevice()).resolves.toBeNull();
   });
+
+  it("reports a rejected adapter request during GPU process recovery", async () => {
+    const failure = new DOMException("A valid external Instance reference no longer exists.", "OperationError");
+    vi.stubGlobal("navigator", { gpu: { requestAdapter: vi.fn().mockRejectedValue(failure) } });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(requestWebGPUDevice()).resolves.toBeNull();
+    expect(error).toHaveBeenCalledWith("Could not request WebGPU adapter:", failure);
+  });
 });

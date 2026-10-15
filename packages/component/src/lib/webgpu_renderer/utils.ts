@@ -18,7 +18,13 @@ export async function requestWebGPUDevice(requiredFeatures: GPUFeatureName[] = [
     return null;
   }
 
-  let adapter = await navigator.gpu.requestAdapter();
+  let adapter: GPUAdapter | null;
+  try {
+    adapter = await navigator.gpu.requestAdapter();
+  } catch (error) {
+    console.error("Could not request WebGPU adapter:", error);
+    return null;
+  }
   if (!adapter) {
     console.error("Could not request WebGPU adapter");
     return null;
@@ -84,6 +90,7 @@ declare global {
 }
 
 function installGpuErrorObservability(device: GPUDevice, meta: { useF16: boolean; sizePresetMiB: number | null }) {
+  deviceLifetime(device);
   if (typeof window === "undefined") return;
   if (!Array.isArray(window.__atlasGpuErrors)) window.__atlasGpuErrors = [];
   window.__atlasGpuDeviceInfo = { ...meta, t: performance.now() };
@@ -111,6 +118,71 @@ function installGpuErrorObservability(device: GPUDevice, meta: { useF16: boolean
     window.__atlasGpuErrors!.push(rec);
     console.warn("[atlas-gpu] device.lost:", rec.reason, rec.message);
   });
+}
+
+interface DeviceLifetime {
+  lost: GPUDeviceLostInfo | null;
+  waiters: Set<(info: GPUDeviceLostInfo) => void>;
+}
+
+const deviceLifetimes = new WeakMap<GPUDevice, DeviceLifetime>();
+
+function deviceLifetime(device: GPUDevice): DeviceLifetime {
+  let lifetime = deviceLifetimes.get(device);
+  if (!lifetime) {
+    const created: DeviceLifetime = {
+      lost: null,
+      waiters: new Set(),
+    };
+    device.lost.then((info) => {
+      created.lost = info;
+      for (const notify of created.waiters) notify(info);
+      created.waiters.clear();
+    });
+    deviceLifetimes.set(device, created);
+    lifetime = created;
+  }
+  return lifetime;
+}
+
+export async function waitForGPUQueue(device: GPUDevice): Promise<void> {
+  const lifetime = deviceLifetime(device);
+  return new Promise<void>((resolve, reject) => {
+    const onLoss = (info: GPUDeviceLostInfo) => reject(new Error(`WebGPU device was lost: ${info.message}`));
+    if (lifetime.lost) {
+      onLoss(lifetime.lost);
+      return;
+    }
+    lifetime.waiters.add(onLoss);
+    try {
+      device.queue.onSubmittedWorkDone().then(
+        () => {
+          lifetime.waiters.delete(onLoss);
+          resolve();
+        },
+        (error) => {
+          lifetime.waiters.delete(onLoss);
+          reject(error);
+        },
+      );
+    } catch (error) {
+      lifetime.waiters.delete(onLoss);
+      reject(error);
+    }
+  });
+}
+
+export async function destroyGPUResource(device: GPUDevice, resource: GPUBuffer | GPUTexture): Promise<void> {
+  const lifetime = deviceLifetime(device);
+  if (lifetime.lost) return;
+  try {
+    await waitForGPUQueue(device);
+    // Device loss already releases native resources; calling destroy on
+    // their invalid Dawn instance can itself throw during GPU recovery.
+    if (!lifetime.lost) resource.destroy();
+  } catch (error) {
+    if (!lifetime.lost) console.warn("[atlas-gpu] Resource cleanup failed:", error);
+  }
 }
 
 function correctedBufferSize(size: number): number {
@@ -145,15 +217,16 @@ export function gpuBuffer(
       // (WebGPU, WebGL, compositor) reports
       // ``kIOGPUCommandBufferCallbackErrorSubmissionsIgnored``.
       const old = state.buffer;
-      device.queue.onSubmittedWorkDone().then(() => old.destroy());
+      void destroyGPUResource(device, old);
     }
     state.buffer = device.createBuffer({ size: correctedBufferSize(byteSize), usage: usage });
     state.byteSize = byteSize;
     state.usage = usage;
     state.destroy = () => {
       const cur = state.buffer;
+      state.buffer = undefined;
       if (cur != null) {
-        device.queue.onSubmittedWorkDone().then(() => cur.destroy());
+        void destroyGPUResource(device, cur);
       }
     };
   }
@@ -220,7 +293,7 @@ export function gpuTexture(
   ) {
     if (state.texture != null) {
       const old = state.texture;
-      device.queue.onSubmittedWorkDone().then(() => old.destroy());
+      void destroyGPUResource(device, old);
     }
     state.texture = device.createTexture({ size: [width, height], format: format, usage: usage });
     state.width = width;
@@ -229,8 +302,9 @@ export function gpuTexture(
     state.usage = usage;
     state.destroy = () => {
       const cur = state.texture;
+      state.texture = undefined;
       if (cur != null) {
-        device.queue.onSubmittedWorkDone().then(() => cur.destroy());
+        void destroyGPUResource(device, cur);
       }
     };
   }

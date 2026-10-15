@@ -308,12 +308,25 @@ tuned to 16 GB; a vanilla browser tab is ~4 GB.
   ```
 - Or reduce the working set (SQL filter, `--sample`, smaller column set).
 
-### Canvas freezes mid-pan on macOS, recovers only on reload
+### GPU connection loss or a frozen canvas after zooming out on macOS
 
-Metal's 5 s `MTLCommandBuffer` watchdog killed a draw pass. We chunk
-dispatches to stay under the limit, but tabs stalled by DevTools or
-extreme background load can re-trip it. Reload the page; the underlying
-data and view state are preserved in the URL.
+Large points overlapping at world scale can exceed Metal's per-command-buffer
+watchdog, especially on Retina displays. Full-data point draws now scale their
+batch size with the squared point radius in device pixels; **All** still draws
+every point at the selected size. Larger points remain more expensive.
+
+The viewer automatically reconnects after unexpected device loss, retries
+temporarily unavailable adapters, and shows a status message if recovery fails.
+If the browser's entire GPU process remains unavailable, reload the page; the
+underlying data and view state are preserved in the URL.
+
+To exercise the Retina zoom and device-recovery regressions against a running
+GIS backend without starting another large-data server:
+
+```bash
+GPU_LOSS_URL=http://127.0.0.1:5055 npx playwright test \
+  e2e/gpu-device-loss.spec.ts --project perf-chrome
+```
 
 ### Empty map after switching datasets in the desktop app
 
@@ -360,9 +373,6 @@ PRs welcome on any of them; cross-link to the relevant section of
   rather than `$state(null)`. The reactive Source proxy adds a duplicate
   retainer chain visible in heap snapshots; ~50 MB overhead at long-
   session steady state.
-- `device.lost` recovery UX. A Metal watchdog trip currently leaves the
-  canvas blank with no affordance. Surface a "GPU recovered — click to
-  re-render" banner.
 - GPU buffer pool: every filter click destroys ~3 GB of GPU buffers and
   reallocates ~3 GB. A 2-slot ring per logical buffer would let the
   new allocation reuse the old storage.
