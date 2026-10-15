@@ -77,9 +77,24 @@ test("desktop electron 300m fluency", async () => {
     expect(onSidecar, `window never navigated to sidecar URL (still ${window.url()})`).toBe(true);
     console.log(`window URL: ${window.url()}`);
 
-    // Wait for canvas to materialise.
+    await window.addInitScript(() => {
+      (window as any).__atlasPerfEnabled = true;
+    });
+    await window.reload();
+    await window.bringToFront();
+
+    // A canvas can exist before its coordinates upload or GPU work completes.
     await window.waitForFunction(
-      () => Array.from(document.querySelectorAll("canvas")).some((c) => (c as HTMLCanvasElement).width > 0),
+      () => {
+        const w = window as any;
+        const summary = w.__atlasPerf?.summary?.();
+        return (
+          w.__atlasFirstBigRenderGpuLogged === true &&
+          summary?.pointCount > 0 &&
+          summary?.count > 0 &&
+          summary.gpu?.count >= summary.count
+        );
+      },
       null,
       { timeout: 120_000 },
     );
@@ -96,6 +111,11 @@ test("desktop electron 300m fluency", async () => {
     const cy = box.y + box.height / 2;
     await window.mouse.move(cx, cy);
     await window.mouse.down();
+    await window.mouse.move(cx + 12, cy + 12);
+    await window.waitForTimeout(250);
+    const held = await window.evaluate(() => (window as any).__atlasPanDbg ?? null);
+    expect(held, "pan dbg never registered for the held drag").not.toBeNull();
+    expect(held.renderCalls, "a held drag must not redraw after the input idle timeout").toBe(0);
     const t0 = Date.now();
     let dx = 0;
     while (Date.now() - t0 < 10_000) {

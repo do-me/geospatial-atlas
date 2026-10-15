@@ -45,6 +45,13 @@ def test_sha256_hexdigest_numpy_array():
     assert h1 != h3
 
 
+def test_sha256_hexdigest_numpy_scalar():
+    # e.g. umap_args={"n_neighbors": np.int64(15)} from a numpy parameter grid
+    assert sha256_hexdigest({"n": np.int64(15)}) == sha256_hexdigest({"n": 15})
+    assert sha256_hexdigest(np.float32(0.5)) == sha256_hexdigest(0.5)
+    assert sha256_hexdigest(np.bool_(True)) == sha256_hexdigest(True)
+
+
 def test_sha256_hexdigest_list():
     assert sha256_hexdigest([1, 2, 3]) == sha256_hexdigest([1, 2, 3])
     assert sha256_hexdigest([1, 2, 3]) != sha256_hexdigest([1, 2, 4])
@@ -177,6 +184,15 @@ def test_file_cache_complex_key(cache_dir):
 def test_file_cache_value_populates_cache(cache_dir):
     file_cache_value("k", lambda: [1, 2, 3], cache_root=cache_dir)
     # Should be readable via file_cache_get now
+    assert file_cache_get("k", cache_root=cache_dir) == [1, 2, 3]
+
+
+def test_file_cache_value_replaces_unreadable_entry(cache_dir):
+    def ser(v, fd):
+        fd.write(b"not json")
+
+    file_cache_set("k", "stale", cache_root=cache_dir, serializer=ser)
+    assert file_cache_value("k", lambda: [1, 2, 3], cache_root=cache_dir) == [1, 2, 3]
     assert file_cache_get("k", cache_root=cache_dir) == [1, 2, 3]
 
 

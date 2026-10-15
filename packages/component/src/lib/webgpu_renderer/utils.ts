@@ -13,7 +13,7 @@ export interface WebGPUDeviceResult {
   useF16: boolean;
 }
 
-export async function requestWebGPUDevice(): Promise<WebGPUDeviceResult | null> {
+export async function requestWebGPUDevice(requiredFeatures: GPUFeatureName[] = []): Promise<WebGPUDeviceResult | null> {
   if (!isWebGPUAvailable()) {
     return null;
   }
@@ -21,6 +21,12 @@ export async function requestWebGPUDevice(): Promise<WebGPUDeviceResult | null> 
   let adapter = await navigator.gpu.requestAdapter();
   if (!adapter) {
     console.error("Could not request WebGPU adapter");
+    return null;
+  }
+
+  const missing = requiredFeatures.filter((feature) => !adapter.features.has(feature));
+  if (missing.length > 0) {
+    console.error("WebGPU adapter does not support required features:", missing.join(", "));
     return null;
   }
 
@@ -42,9 +48,11 @@ export async function requestWebGPUDevice(): Promise<WebGPUDeviceResult | null> 
   const adapterSupportsF16 = adapter.features.has("shader-f16");
   const attempts: Array<{ features: GPUFeatureName[]; useF16: boolean }> = [];
   if (adapterSupportsF16) {
-    attempts.push({ features: ["shader-f16"], useF16: true });
+    attempts.push({ features: [...new Set<GPUFeatureName>(["shader-f16", ...requiredFeatures])], useF16: true });
   }
-  attempts.push({ features: [], useF16: false });
+  if (!requiredFeatures.includes("shader-f16")) {
+    attempts.push({ features: requiredFeatures, useF16: false });
+  }
 
   for (const { features, useF16 } of attempts) {
     for (const sz of limitPresets) {

@@ -37,7 +37,7 @@
 // Y source allocates; that holds peak at 3.86 GB (same as the unsequenced
 // u16 path used to). See ``EmbeddingRenderer.maybeRunUnpack``.
 
-import type { Dataflow, Node } from "../dataflow.js";
+import type { Dataflow, DataflowNode } from "@embedding-atlas/utils";
 
 import unpackShaderCode from "./unpack.wgsl?raw";
 
@@ -63,18 +63,18 @@ const U32_MAX = 4_294_967_295;
 
 /** Compile the unpack shader module. Cheap (<1 ms) and idempotent — the
  *  dataflow caches the result against ``device``. */
-function makeUnpackModule(df: Dataflow, device: Node<GPUDevice>): Node<GPUShaderModule> {
+function makeUnpackModule(df: Dataflow, device: DataflowNode<GPUDevice>): DataflowNode<GPUShaderModule> {
   return df.derive([device], (device) => device.createShaderModule({ code: unpackShaderCode }));
 }
 
 /** Compile the unpack compute pipeline + bind group layout. The pipeline
  *  is reused across both axes and across data updates. */
 export interface UnpackPipeline {
-  pipeline: Node<GPUComputePipeline>;
-  bindGroupLayout: Node<GPUBindGroupLayout>;
+  pipeline: DataflowNode<GPUComputePipeline>;
+  bindGroupLayout: DataflowNode<GPUBindGroupLayout>;
 }
 
-export function makeUnpackPipeline(df: Dataflow, device: Node<GPUDevice>): UnpackPipeline {
+export function makeUnpackPipeline(df: Dataflow, device: DataflowNode<GPUDevice>): UnpackPipeline {
   const module = makeUnpackModule(df, device);
   const bindGroupLayout = df.derive([device], (device) =>
     device.createBindGroupLayout({

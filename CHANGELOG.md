@@ -7,6 +7,58 @@ releases used the `app-vX.Y.Z` prefix). Other streams (Python package,
 static web viewer) have their own changelogs / tag prefixes — see
 [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## Unreleased — upstream v0.26.0 integration
+
+Source packages are synchronized with `apple/embedding-atlas` through
+`ef64656` (26 commits since the previous upstream merge). The desktop
+release version remains v0.0.8.
+
+### Added
+
+- GPU-rendered parallel coordinates with numeric, temporal, and categorical
+  axes, coloring, and coordinated axis brushing.
+- Optional neighbor-graph metrics: `--degree` adds in/out/total degree,
+  `--kcore` adds core numbers, and `--clustering` adds local clustering
+  coefficients. PageRank now lives alongside these in `graph_metrics`.
+- Feature descriptions and lists of similar features in the features view.
+- A programmatic `highlight` viewer prop, synchronized across coordinated
+  views, and CLI `--state` for loading exported viewer state from JSON or
+  a file. `--state` also works on the fork's fast GIS loading path.
+
+### Fixed
+
+- Default widget row IDs follow input row order, including data spanning
+  multiple DuckDB row groups.
+- NumPy scalar cache keys, Windows cache-file replacement, and automatic
+  vector detection for NumPy/Polars list columns.
+- `.ndjson` loading, WebP/HEIF/HEIC/AVIF image detection, and the MIME type
+  sent to image embedding providers.
+- Per-value timezone offsets when inferring date/time formatting.
+- The viewer MCP `data_query` tool rejects non-readonly and multi-statement
+  queries.
+- Deep equality handles objects that shadow `hasOwnProperty`; shared
+  dataflow contexts detach destroyed children.
+- Cross-platform version consistency checks and documentation image
+  loading; refreshed GitHub Actions dependencies.
+- Large-data validation exposed a drag-idle timeout that scheduled full
+  GPU redraws while the mouse remained held. Dragging now stays on the
+  CSS-pan path until release or window blur, including slow input events.
+
+### Fork compatibility
+
+- Retained GIS detection, geocoding, Overture display support, wide-integer
+  rendering, interrupted Arrow recovery, packed-coordinate GPU uploads,
+  chunked drawing, gesture compaction, f32 fallback, and deferred GPU
+  resource destruction.
+- Adapted parallel coordinates to the fork's GPU-device result and retained
+  its required `float32-blendable` feature through f16 fallback.
+- Kept the macOS/Python 3.12 PageRank crash workaround in `graph_metrics`
+  and compatibility imports from `embedding_atlas.pagerank`.
+- Retained the `geospatial-atlas` package/CLI name and adapted upstream's
+  version checker to the fork's Python lockfile.
+- Upstream removed the obsolete Python `show_table`, `show_charts`, and
+  `show_embedding` options. Configure layouts via `initial_state` instead.
+
 ## v0.0.8 — 2026-04-29
 
 **322 M-row scaling.** Verified end-to-end on the eubucco buildings

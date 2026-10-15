@@ -268,14 +268,25 @@
   // refreshes mid-gesture (see skipDownsampleCompute below) — re-compute
   // happens on gesture release once isInteracting flips false.
   let lastFullComputeAt = $state(0);
+  let isPanning = false;
   let interactionDecayTimer: ReturnType<typeof setTimeout> | null = null;
   function bumpInteraction() {
     isInteracting = true;
     if (interactionDecayTimer != null) clearTimeout(interactionDecayTimer);
     interactionDecayTimer = setTimeout(() => {
-      isInteracting = false;
+      // A held drag remains active even when input events arrive slowly.
+      if (!isPanning) isInteracting = false;
       interactionDecayTimer = null;
     }, 150);
+  }
+
+  function endPan() {
+    isPanning = false;
+    if (interactionDecayTimer != null) {
+      clearTimeout(interactionDecayTimer);
+      interactionDecayTimer = null;
+    }
+    isInteracting = false;
   }
 
   // Wheel-zoom suppression. Mid-wheel, every tick changes ``scale`` —
@@ -1005,6 +1016,7 @@
   });
 
   onDestroy(() => {
+    endPan();
     renderer?.destroy();
     renderer = null;
     if (map) {
@@ -1115,6 +1127,7 @@
         let sy = isGis ? -sx : c0.y - c1.y;
         let x0 = resolvedViewportState.x;
         let y0 = resolvedViewportState.y;
+        isPanning = true;
         bumpInteraction();
         return {
           move: (e2: CursorValue) => {
@@ -1125,18 +1138,7 @@
               scale: resolvedViewportState.scale,
             });
           },
-          up: () => {
-            // With the CSS-pan fast path no GPU work is in flight during
-            // the gesture, so we can snap isInteracting false immediately
-            // — the next $effect.pre run does the full re-render at the
-            // release viewport and clears the canvas CSS transform in one
-            // frame. Skipping the decay makes the visual "settle" instant.
-            if (interactionDecayTimer != null) {
-              clearTimeout(interactionDecayTimer);
-              interactionDecayTimer = null;
-            }
-            isInteracting = false;
-          },
+          up: endPan,
         };
       }
     }
@@ -1355,6 +1357,8 @@
     element.addEventListener("wheel", () => {}, { passive: true });
   }
 </script>
+
+<svelte:window onblur={endPan} />
 
 <div style:width="{width}px" style:height="{height}px" style:position="relative" use:onWheelWorkaround>
   <div
