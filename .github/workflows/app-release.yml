@@ -10,7 +10,7 @@ name: app release (desktop)
 # ``uv run geospatial-atlas`` CLI path.
 #
 # Trigger manually via the Actions tab or by pushing a tag shaped like
-# `v0.0.9`. Manual runs build artifacts only unless an existing release
+# `v0.0.10`. Manual runs build artifacts only unless an existing release
 # tag is supplied. On tag push, artifacts are attached to a draft GitHub
 # Release. (Desktop releases up to app-v0.0.6 used the `app-v*`
 # prefix; the scheme switched to bare `v*` so Zenodo's auto-DOI

@@ -7,7 +7,7 @@ releases used the `app-vX.Y.Z` prefix). The static web viewer is deployed
 manually; this fork does not publish Python or npm packages — see
 [`docs/RELEASING.md`](docs/RELEASING.md).
 
-## v0.0.9 — 2026-10-16
+## v0.0.10 — 2026-10-16
 
 Source packages are synchronized with `apple/embedding-atlas` through
 `ef64656` (26 commits since the previous upstream merge).
@@ -55,6 +55,9 @@ Source packages are synchronized with `apple/embedding-atlas` through
   workflow placeholder, and expensive demo generation from routine CI.
 - Align desktop release tooling with the current WASM dependencies and
   use locked npm installs for all three supported platforms.
+- Restore missing cross-platform desktop lockfile entries without
+  upgrading existing dependencies. Routine CI now checks the desktop
+  lockfile too. The failed, unpublished v0.0.9 build tag is unchanged.
 
 ### Fork compatibility
 

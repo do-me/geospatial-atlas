@@ -55,6 +55,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Check desktop dependency lockfile
+        run: npm --prefix apps/desktop ci --ignore-scripts --dry-run --no-audit --no-fund
+
       - name: Run type checks
         run: npm run check
 

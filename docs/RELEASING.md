@@ -23,19 +23,19 @@ Minimal path:
 
 ```bash
 # 1. Bump the desktop version and its lockfile without creating a tag.
-npm --prefix apps/desktop version 0.0.9 --no-git-tag-version
+npm --prefix apps/desktop version 0.0.10 --no-git-tag-version
 #
 # 2. Update CHANGELOG.md with the highlights.
 #
 # 3. Commit the version bump.
-git commit -am "chore(desktop): bump version to 0.0.9"
+git commit -am "chore(desktop): bump version to 0.0.10"
 
 # 4. After merging the release changes into main, tag that commit and push.
-git tag v0.0.9 origin/main
-git push origin v0.0.9
+git tag v0.0.10 origin/main
+git push origin v0.0.10
 ```
 
-Pushing the `v0.0.9` tag triggers
+Pushing the `v0.0.10` tag triggers
 `.github/workflows/app-release.yml`, which:
 
 1. Checks that the tag matches `apps/desktop/package.json`.
@@ -55,7 +55,7 @@ workflow checks out the tagged source, verifies its desktop version, and
 creates a draft only after every installer builds:
 
 ```bash
-gh workflow run app-release.yml --ref main -f release_tag=v0.0.9
+gh workflow run app-release.yml --ref main -f release_tag=v0.0.10
 ```
 
 ### Unsigned builds
@@ -85,7 +85,7 @@ We follow **semver** for each stream independently:
   (CLI flags, backend HTTP schema, exported viewer's `metadata.json`).
 
 The desktop release version is independent of the source-package version
-inherited from upstream (for example, desktop `v0.0.9` and source `0.26.0`).
+inherited from upstream (for example, desktop `v0.0.10` and source `0.26.0`).
 
 ---
 
@@ -135,7 +135,7 @@ Linux doesn't have a Gatekeeper-equivalent. Just sign `.deb` / `.rpm` with
 Keep a top-level `CHANGELOG.md`. Prepend on each release:
 
 ```md
-## v0.0.9 — 2026-10-16
+## v0.0.10 — 2026-10-16
 
 **Desktop release.**
 
@@ -161,8 +161,8 @@ Keep a top-level `CHANGELOG.md`. Prepend on each release:
 `.github/workflows/ci.yml` runs on pull requests, pushes to `main`, and
 manual dispatch. It retains builds, type checks, formatting, tests, and
 Clippy. Python checks use 3.12, including a clean installed-wheel smoke
-test. The wheel is built for validation and desktop bundling, not PyPI
-publication.
+test. The desktop lockfile is checked without downloading Electron.
+The wheel is built for validation and desktop bundling, not PyPI publication.
 
 CI does not generate demo embeddings, upload unused package/site
 artifacts, publish registries, or deploy Pages. Demo cache regeneration,
