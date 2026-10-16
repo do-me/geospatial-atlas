@@ -10,8 +10,9 @@ name: app release (desktop)
 # ``uv run geospatial-atlas`` CLI path.
 #
 # Trigger manually via the Actions tab or by pushing a tag shaped like
-# `v0.0.9`. Manual runs build artifacts only. On tag push, artifacts are
-# attached to a draft GitHub Release. (Desktop releases up to app-v0.0.6 used the `app-v*`
+# `v0.0.9`. Manual runs build artifacts only unless an existing release
+# tag is supplied. On tag push, artifacts are attached to a draft GitHub
+# Release. (Desktop releases up to app-v0.0.6 used the `app-v*`
 # prefix; the scheme switched to bare `v*` so Zenodo's auto-DOI
 # integration picks up clean version strings.)
 #
@@ -22,6 +23,11 @@ name: app release (desktop)
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing v* tag to build and draft (empty = build only)"
+        required: false
+        type: string
   push:
     tags:
       - "v*"
@@ -54,13 +60,17 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
 
       - name: Check release tag matches desktop version
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
         shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
           VERSION=$(node -p "require('./apps/desktop/package.json').version")
-          test "$GITHUB_REF_NAME" = "v$VERSION"
+          test "$RELEASE_TAG" = "v$VERSION"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -101,27 +111,7 @@ jobs:
           sudo apt-get install -y rpm
 
       - name: Install npm workspaces (root → component, viewer, backend, …)
-        run: npm ci --no-audit --no-fund
-
-      # Workaround for https://github.com/npm/cli/issues/4828: npm's
-      # workspace install doesn't reliably install platform-specific
-      # optional deps (rolldown/lightningcss native bindings).
-      - name: Install platform-specific native bindings
-        shell: bash
-        run: |
-          ROLLDOWN_VERSION=$(node -p "require('./node_modules/rolldown/package.json').version")
-          LIGHTNINGCSS_VERSION=$(node -p "require('./node_modules/lightningcss/package.json').version")
-          case "${{ matrix.os }}-${{ matrix.arch }}" in
-            macos-arm64)
-              PKGS="@rolldown/binding-darwin-arm64@$ROLLDOWN_VERSION lightningcss-darwin-arm64@$LIGHTNINGCSS_VERSION" ;;
-            linux-x64)
-              PKGS="@rolldown/binding-linux-x64-gnu@$ROLLDOWN_VERSION lightningcss-linux-x64-gnu@$LIGHTNINGCSS_VERSION" ;;
-            windows-x64)
-              PKGS="@rolldown/binding-win32-x64-msvc@$ROLLDOWN_VERSION lightningcss-win32-x64-msvc@$LIGHTNINGCSS_VERSION" ;;
-          esac
-          if [ -n "$PKGS" ]; then
-            npm install --no-save --package-lock=false --no-audit --no-fund $PKGS
-          fi
+        run: npm ci --include=optional --no-audit --no-fund
 
       - name: Sync backend Python env
         working-directory: packages/backend
@@ -205,7 +195,7 @@ jobs:
   release:
     name: draft release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -221,8 +211,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          name: ${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}
+          name: ${{ inputs.release_tag || github.ref_name }}
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
           generate_release_notes: true
           files: |
             dist/*.dmg

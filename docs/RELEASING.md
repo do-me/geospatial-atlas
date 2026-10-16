@@ -48,8 +48,15 @@ Pushing the `v0.0.9` tag triggers
 6. You review the draft on github.com, write release notes (or let the
    auto-generated ones stand), and click **Publish**.
 
-Manual runs of the desktop workflow build downloadable artifacts only;
-they do not create a release from an unversioned branch.
+Manual runs of the desktop workflow build downloadable artifacts only by
+default. To repair a failed build without moving an existing tag, run the
+latest workflow from `main` with `release_tag` set to that tag. The
+workflow checks out the tagged source, verifies its desktop version, and
+creates a draft only after every installer builds:
+
+```bash
+gh workflow run app-release.yml --ref main -f release_tag=v0.0.9
+```
 
 ### Unsigned builds
 
