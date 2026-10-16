@@ -10,15 +10,11 @@ on:
   pull_request:
     branches:
       - main
-  release:
-    types:
-      - published
   workflow_dispatch:
-    inputs:
-      publish_pages:
-        description: "Publish Documentation Website"
-        required: false
-        type: boolean
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -34,11 +30,12 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
+          cache: npm
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.14"
+          python-version: "3.12"
 
       - name: Set up Rust for WebAssembly
         run: |
@@ -47,20 +44,13 @@ jobs:
 
       - name: Set up uv package manager
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
 
       - name: Install dependencies
         run: |
           npm ci
-          cd packages/backend && uv sync --frozen
-
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: cache-files
-        with:
-          path: ~/.cache/embedding_atlas
-          key: ${{ runner.os }}-embedding-atlas
-
-      - name: Generate cached demo data
-        run: cd packages/docs && npm run generate_cache
+          uv sync --frozen --package geospatial-atlas
 
       - name: Build
         run: npm run build
@@ -71,128 +61,16 @@ jobs:
       - name: Run tests
         run: npm run test
 
+      - name: Smoke-test installed Python wheel
+        run: |
+          uv venv --python 3.12 "$RUNNER_TEMP/wheel-smoke"
+          uv pip install --python "$RUNNER_TEMP/wheel-smoke/bin/python" dist/*.whl anywidget streamlit
+          "$RUNNER_TEMP/wheel-smoke/bin/geospatial-atlas" --help
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -c "from embedding_atlas.projection import compute_projection; from embedding_atlas.widget import EmbeddingAtlasWidget; from embedding_atlas.streamlit import embedding_atlas"
+
       - name: Run code format check
         run: npm run check-format
 
       # Add -- -D warnings to treat warnings as errors once existing warnings are resolved
       - name: Run Clippy
         run: cargo clippy --workspace
-
-      - name: Upload node package artifact
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: node-dist
-          path: packages/embedding-atlas/
-
-      - name: Upload python package artifact
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: python-dist
-          path: dist/
-
-      - name: Upload docs artifact
-        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
-        with:
-          path: packages/docs/.vitepress/dist/
-
-  test-python:
-    runs-on: ubuntu-latest
-    needs: build
-    strategy:
-      matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
-    steps:
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Download wheel
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: python-dist
-          path: dist/
-
-      - name: Install wheel
-        run: pip install dist/*.whl
-
-      - name: Run tests
-        run: |
-          geospatial-atlas --help
-
-          python -c "import embedding_atlas"
-          python -c "from embedding_atlas.projection import compute_projection"
-
-          pip install jupyterlab anywidget
-          python -c "from embedding_atlas.widget import EmbeddingAtlasWidget"
-
-          pip install streamlit
-          python -c "from embedding_atlas.streamlit import embedding_atlas"
-
-  publish-pypi:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'release'
-    needs:
-      - build
-    permissions:
-      id-token: write
-
-    environment:
-      name: pypi
-      url: https://pypi.org/p/embedding-atlas
-
-    steps:
-      - name: Retrieve release distributions
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: python-dist
-          path: dist/
-
-      - name: Publish release distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
-        with:
-          packages-dir: dist/
-
-  publish-npmjs:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'release'
-    needs:
-      - build
-    permissions:
-      contents: read
-      id-token: write
-
-    environment:
-      name: npmjs
-
-    steps:
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: "24"
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Retrieve release distributions
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: node-dist
-          path: package/
-
-      - run: cd package && npm publish --provenance --access public
-
-  publish-pages:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'release' || inputs.publish_pages == true
-    needs:
-      - build
-    permissions:
-      pages: write
-      id-token: write
-
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

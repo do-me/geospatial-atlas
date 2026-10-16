@@ -39,9 +39,9 @@ remaining work for Tauri-wrapped mobile builds is:
      configured via Xcode.
    - Android: a signing keystore committed as a GitHub secret.
 
-4. **CI** — `app-mobile-release.yml` (scaffolded in `.github/workflows/`)
-   is currently a placeholder with manual-dispatch TODOs. Turn on the
-   actual build steps once (1)–(3) are done.
+4. **CI** — add a mobile release workflow only once (1)–(3) are done.
+   The old placeholder workflow was removed because it did not build
+   or publish any mobile artifacts.
 
 ### Why not ship now?
 
@@ -54,4 +54,4 @@ remaining work for Tauri-wrapped mobile builds is:
   probably add a progressive-load or remote-query mode in a separate
   iteration.
 
-When ready, uncomment the jobs in `.github/workflows/app-mobile-release.yml`.
+When ready, add platform builds and signing to a dedicated mobile workflow.
