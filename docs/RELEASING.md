@@ -1,15 +1,13 @@
 # Releasing geospatial-atlas
 
-Three release streams. The desktop app uses bare `v*` tags (so Zenodo's
-GitHub integration archives clean version strings like `v0.0.7`); the
-Python package and static web viewer keep prefixed tags to avoid
-colliding with the repo-wide desktop scheme.
+The desktop app is released on GitHub using bare `v*` tags. The static
+web viewer is deployed manually. This fork does not publish packages
+to PyPI or npm.
 
-| Stream            | Tag prefix | Distro                                          | Workflow                                                |
-| ----------------- | ---------- | ----------------------------------------------- | ------------------------------------------------------- |
-| Desktop app       | `v*`       | `.dmg` / `.AppImage` / `.deb` / `.msi` / `.exe` | `.github/workflows/app-release.yml`                     |
-| Python package    | `py-v*`    | PyPI wheel (`geospatial-atlas`)                 | (add later — see _Python release_ below)                |
-| Static web viewer | `web-v*`   | GitHub Pages                                    | `.github/workflows/deploy-gh-pages.sh` (manual for now) |
+| Stream            | Tag prefix | Distribution                               | Workflow                              |
+| ----------------- | ---------- | ------------------------------------------ | ------------------------------------- |
+| Desktop app       | `v*`       | `.dmg` / `.deb` / `.rpm` / `.msi` / `.exe` | `.github/workflows/app-release.yml`   |
+| Static web viewer | None       | GitHub Pages                               | `scripts/deploy-gh-pages.sh` (manual) |
 
 Desktop releases up through `app-v0.0.6` used the `app-v*` prefix; the
 scheme switched at v0.0.7 when the Zenodo auto-DOI integration went
@@ -24,34 +22,36 @@ Mobile is documented in [MOBILE.md](./MOBILE.md) and not shipped yet.
 Minimal path:
 
 ```bash
-# 1. Bump the version in apps/desktop/package.json ("version").
-#    (electron-builder reads that single source of truth — no other
-#    files to bump since the Tauri shell was replaced with Electron.)
+# 1. Bump the desktop version and its lockfile without creating a tag.
+npm --prefix apps/desktop version 0.0.9 --no-git-tag-version
 #
 # 2. Update CHANGELOG.md with the highlights.
 #
 # 3. Commit the version bump.
-git commit -am "chore(desktop): bump version to 0.0.7"
+git commit -am "chore(desktop): bump version to 0.0.9"
 
-# 4. Tag and push.
-git tag v0.0.7
-git push origin main v0.0.7
+# 4. After merging the release changes into main, tag that commit and push.
+git tag v0.0.9 origin/main
+git push origin v0.0.9
 ```
 
-Pushing the `v0.0.7` tag triggers
+Pushing the `v0.0.9` tag triggers
 `.github/workflows/app-release.yml`, which:
 
-1. Spawns four matrix builds: **macOS arm64**, **macOS x64**, **Linux x64**,
-   **Windows x64**.
-2. Builds the viewer → backend static → PyInstaller sidecar → Electron
+1. Checks that the tag matches `apps/desktop/package.json`.
+2. Spawns three matrix builds: **macOS arm64**, **Linux x64**, **Windows x64**.
+3. Builds the viewer → backend static → PyInstaller sidecar → Electron
    app (via `electron-builder`) for each.
-3. Uploads `.dmg`, `.deb`, `.rpm`, `.msi`, and `.exe` artifacts.
-4. Creates a **draft** GitHub Release with the tag as name and all
+4. Uploads `.dmg`, `.deb`, `.rpm`, `.msi`, and `.exe` artifacts.
+5. Creates a **draft** GitHub Release with the tag as name and all
    artifacts attached.
-5. You review the draft on github.com, write release notes (or let the
+6. You review the draft on github.com, write release notes (or let the
    auto-generated ones stand), and click **Publish**.
 
-### v0.0.1 quickstart (no signing yet)
+Manual runs of the desktop workflow build downloadable artifacts only;
+they do not create a release from an unversioned branch.
+
+### Unsigned builds
 
 For the very first release you can ship **unsigned** builds. Expect
 these user-facing caveats:
@@ -61,7 +61,7 @@ these user-facing caveats:
 - **Windows**: SmartScreen will show "Windows protected your PC — Don't
   run". Users click _More info → Run anyway_. This goes away once you
   have an EV code-signing cert.
-- **Linux**: No prompt. `.AppImage` should be `chmod +x`'d before run.
+- **Linux**: Install the `.deb` or `.rpm` using the system package manager.
 
 This is fine for a v0.0.x / pre-1.0 release where early users tolerate
 friction. Add signing before v0.1.
@@ -77,9 +77,8 @@ We follow **semver** for each stream independently:
 - `1.0.0`: commit to backwards compatibility for the public API
   (CLI flags, backend HTTP schema, exported viewer's `metadata.json`).
 
-Desktop app version must match the Python package version **after 1.0** so
-`embedding-atlas==X.Y.Z` speaks to `Geospatial Atlas vX.Y.Z`. Before 1.0 they
-can drift (desktop is `v0.0.7`, Python is `0.20.0`).
+The desktop release version is independent of the source-package version
+inherited from upstream (for example, desktop `v0.0.9` and source `0.26.0`).
 
 ---
 
@@ -129,7 +128,7 @@ Linux doesn't have a Gatekeeper-equivalent. Just sign `.deb` / `.rpm` with
 Keep a top-level `CHANGELOG.md`. Prepend on each release:
 
 ```md
-## v0.0.7 — 2026-05-01
+## v0.0.9 — 2026-10-16
 
 **Desktop release.**
 
@@ -150,28 +149,31 @@ Keep a top-level `CHANGELOG.md`. Prepend on each release:
 
 ---
 
-## Python release (not yet wired up)
+## CI and source packages
 
-For when you want to release the `embedding-atlas` wheel to PyPI:
+`.github/workflows/ci.yml` runs on pull requests, pushes to `main`, and
+manual dispatch. It retains builds, type checks, formatting, tests, and
+Clippy. Python checks use 3.12, including a clean installed-wheel smoke
+test. The wheel is built for validation and desktop bundling, not PyPI
+publication.
+
+CI does not generate demo embeddings, upload unused package/site
+artifacts, publish registries, or deploy Pages. Demo cache regeneration,
+when needed, is a separate manual step:
 
 ```bash
-# Bump packages/backend/pyproject.toml version.
-git tag py-v0.20.1
-git push origin py-v0.20.1
+npm run generate_cache --workspace packages/docs
 ```
-
-A future `py-release.yml` workflow would:
-
-- `uv build --wheel --sdist` in `packages/backend/`.
-- Publish via `twine` using `PYPI_TOKEN` secret.
 
 ---
 
 ## Web (static viewer) release
 
 The static viewer currently deploys via the existing
-`scripts/deploy-gh-pages.sh`. For now that's run manually. Tag format
-`web-v*` is reserved for a future automated workflow.
+`scripts/deploy-gh-pages.sh`, following the build steps in the root
+README. GitHub Pages must use the `gh-pages` branch, root `/`, rather
+than GitHub Actions as its source. Desktop tags and release publication
+do not deploy the site.
 
 ---
 
@@ -180,10 +182,10 @@ The static viewer currently deploys via the existing
 After a release publishes:
 
 1. Download the `.dmg` / `.deb` / `.msi` from the GitHub Release.
-2. Install on a clean VM (or at least `rm -rf ~/Library/Application\ Support/io.github.do-me.geospatial-atlas`).
+2. Install on a clean VM or use a separate test profile, preserving saved
+   viewer state in the normal profile.
 3. Open a Parquet file with `lon`/`lat`.
 4. Confirm: WebGPU probe passes, load progresses, view restores on relaunch.
 
-If the release is broken, **delete the GitHub Release + the tag**
-(`git tag -d v0.0.7 && git push --delete origin v0.0.7`), fix,
-re-tag.
+If a published release is broken, document the issue and ship a new patch
+version rather than replacing artifacts behind an existing version tag.

@@ -3,15 +3,14 @@
 All notable changes to the Geospatial Atlas desktop app are documented here.
 
 Desktop-app releases are tagged `vX.Y.Z` (from v0.0.7 onward; earlier
-releases used the `app-vX.Y.Z` prefix). Other streams (Python package,
-static web viewer) have their own changelogs / tag prefixes — see
+releases used the `app-vX.Y.Z` prefix). The static web viewer is deployed
+manually; this fork does not publish Python or npm packages — see
 [`docs/RELEASING.md`](docs/RELEASING.md).
 
-## Unreleased — upstream v0.26.0 integration
+## v0.0.9 — 2026-10-16
 
 Source packages are synchronized with `apple/embedding-atlas` through
-`ef64656` (26 commits since the previous upstream merge). The desktop
-release version remains v0.0.8.
+`ef64656` (26 commits since the previous upstream merge).
 
 ### Added
 
@@ -27,6 +26,10 @@ release version remains v0.0.8.
 
 ### Fixed
 
+- Large-point world-zoom GPU crashes on Retina displays: draw batches now
+  scale with device-pixel point area without dropping points or changing
+  their size. Lost-device cleanup, adapter retries, and unmount guards
+  prevent cascading errors and stuck views.
 - Default widget row IDs follow input row order, including data spanning
   multiple DuckDB row groups.
 - NumPy scalar cache keys, Windows cache-file replacement, and automatic
@@ -43,6 +46,15 @@ release version remains v0.0.8.
 - Large-data validation exposed a drag-idle timeout that scheduled full
   GPU redraws while the mouse remained held. Dragging now stays on the
   CSS-pan path until release or window blur, including slow input events.
+
+### Maintenance
+
+- Keep builds, type checks, formatting, JavaScript/Python/Rust tests, and
+  Clippy in CI, with one Python runtime and an installed-wheel smoke test.
+- Remove unused registry/Pages publishing, package uploads, the mobile
+  workflow placeholder, and expensive demo generation from routine CI.
+- Align desktop release tooling with the current WASM dependencies and
+  use locked npm installs for all three supported platforms.
 
 ### Fork compatibility
 
