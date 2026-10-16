@@ -175,8 +175,8 @@ jobs:
               cp "$SRC/Geospatial Atlas-$VERSION-arm64.dmg" "$DST/$BASE.dmg"
               ;;
             linux)
-              cp "$SRC/Geospatial Atlas-$VERSION-linux-x64.deb" "$DST/$BASE.deb"
-              cp "$SRC/Geospatial Atlas-$VERSION-linux-x64.rpm" "$DST/$BASE.rpm"
+              cp "$SRC/Geospatial Atlas-$VERSION-linux-amd64.deb" "$DST/$BASE.deb"
+              cp "$SRC/Geospatial Atlas-$VERSION-linux-x86_64.rpm" "$DST/$BASE.rpm"
               ;;
             windows)
               cp "$SRC/Geospatial Atlas-$VERSION-win-x64.msi" "$DST/$BASE.msi"
